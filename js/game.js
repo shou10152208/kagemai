@@ -203,7 +203,7 @@ export class Game {
       this.maxCombo = Math.max(this.maxCombo, this.combo);
       this.counts[judge]++;
     }
-    this.audio.hitSound(this.settings.hitSound, judge);
+    this.audio.hitSound(this.settings.hitSound, judge, (this.settings.hitVolume ?? 80) / 100);
     this.stage.hitFx(note.x, note.y, judge);
     this.cb.onJudge(judge, note);
   }

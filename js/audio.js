@@ -152,12 +152,13 @@ export class AudioEngine {
    * 判定時のヒット効果音を即時再生する。
    * type: 'none' | 'suzu'(鈴) | 'hyoshigi'(拍子木) | 'tsuzumi'(鼓)
    * judge が 'good' のときは控えめに、'miss' は鳴らさない。
+   * volume: 0..1(設定のヒット音量)
    */
-  hitSound(type, judge = 'perfect') {
-    if (!type || type === 'none' || judge === 'miss') return;
+  hitSound(type, judge = 'perfect', volume = 1) {
+    if (!type || type === 'none' || judge === 'miss' || volume <= 0) return;
     const ctx = this.ensure();
     const t = ctx.currentTime;
-    const vol = judge === 'perfect' ? 1 : 0.55;
+    const vol = (judge === 'perfect' ? 1 : 0.55) * Math.min(volume, 1);
     const jitter = () => 1 + (Math.random() - 0.5) * 0.06; // 連打の機械っぽさを消す
     if (type === 'suzu') {
       // 鈴: 非整数倍音のきらめき+高域ノイズの「シャン」

@@ -1,14 +1,54 @@
 /* kagemai — 和モダン(墨・和紙・光の筆) */
 
 :root {
-  --sumi: #14100c;        /* 墨 */
+  --sumi: #14100c;        /* 墨(金地の上の文字色などに使う。テーマで変えない) */
   --sumi-usu: #4a443c;    /* 薄墨 */
-  --washi: #e8e0cf;       /* 和紙 */
-  --washi-dim: #b0a691;
   --kin: #c9a24b;         /* 金 */
   --shu: #d9553b;         /* 朱(右手) */
   --ai: #5878a8;          /* 藍(左手) */
   --serif: "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", serif;
+
+  /* ---- テーマ変数(既定: 墨) ---- */
+  --page-bg: #14100c;
+  --text: #e8e0cf;              /* 和紙色の文字 */
+  --text-dim: #b0a691;
+  --screen-bg1: rgba(20, 16, 12, 0.82);
+  --screen-bg2: rgba(20, 16, 12, 0.9);
+  --panel-bg: rgba(20, 16, 12, 0.72);
+  --miss-color: #4a443c;
+}
+
+/* 宵: やわらかい藍の夜 */
+body[data-theme="yoi"] {
+  --page-bg: #131a2c;
+  --screen-bg1: rgba(21, 28, 48, 0.84);
+  --screen-bg2: rgba(13, 17, 31, 0.92);
+  --panel-bg: rgba(18, 24, 42, 0.74);
+  --text: #e3e6ef;
+  --text-dim: #9aa3ba;
+  --miss-color: #59627a;
+}
+
+/* 桜: 明るいピンク(子供にも怖くない) */
+body[data-theme="sakura"] {
+  --page-bg: #f4e4e6;
+  --screen-bg1: rgba(246, 233, 235, 0.88);
+  --screen-bg2: rgba(238, 216, 221, 0.94);
+  --panel-bg: rgba(252, 246, 247, 0.8);
+  --text: #4a3540;
+  --text-dim: #8d7280;
+  --miss-color: #b39aa5;
+}
+
+/* 和紙: 明るいクリーム */
+body[data-theme="washi"] {
+  --page-bg: #efe8d8;
+  --screen-bg1: rgba(242, 235, 220, 0.88);
+  --screen-bg2: rgba(230, 220, 198, 0.94);
+  --panel-bg: rgba(250, 246, 236, 0.8);
+  --text: #443c2e;
+  --text-dim: #8a7f68;
+  --miss-color: #a89c82;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -19,8 +59,8 @@
 html, body {
   height: 100%;
   overflow: hidden;
-  background: var(--sumi);
-  color: var(--washi);
+  background: var(--page-bg);
+  color: var(--text);
   font-family: var(--serif);
   -webkit-user-select: none;
   user-select: none;
@@ -70,7 +110,7 @@ html, body {
   text-align: center;
   background:
     radial-gradient(120% 90% at 50% 0%, rgba(201, 162, 75, 0.06), transparent 55%),
-    linear-gradient(rgba(20, 16, 12, 0.82), rgba(20, 16, 12, 0.9));
+    linear-gradient(var(--screen-bg1), var(--screen-bg2));
 }
 .screen[hidden] { display: none; }
 .screen-hud { background: none; }
@@ -95,11 +135,11 @@ html, body {
   font-weight: 500;
   letter-spacing: 0.18em;
   text-indent: 0.18em;
-  color: var(--washi);
+  color: var(--text);
   text-shadow: 0 0 34px rgba(201, 162, 75, 0.35), 0 2px 2px rgba(0, 0, 0, 0.6);
 }
 .game-subtitle {
-  color: var(--washi-dim);
+  color: var(--text-dim);
   letter-spacing: 0.3em;
   font-size: clamp(12px, 3vw, 16px);
   margin-bottom: 20px;
@@ -120,7 +160,7 @@ html, body {
   font-size: 17px;
   letter-spacing: 0.2em;
   text-indent: 0.1em;
-  color: var(--washi);
+  color: var(--text);
   background: rgba(232, 224, 207, 0.04);
   border: 1px solid rgba(201, 162, 75, 0.55);
   padding: 14px 34px;
@@ -146,7 +186,7 @@ html, body {
   padding: 16px 22px;
 }
 .mode-name { font-size: 18px; letter-spacing: 0.15em; }
-.mode-desc { font-size: 12.5px; color: var(--washi-dim); letter-spacing: 0.05em; }
+.mode-desc { font-size: 12.5px; color: var(--text-dim); letter-spacing: 0.05em; }
 .mode-badge {
   position: absolute;
   top: 10px;
@@ -158,14 +198,14 @@ html, body {
   letter-spacing: 0.1em;
 }
 
-.fineprint { font-size: 12px; color: var(--washi-dim); line-height: 1.9; letter-spacing: 0.06em; }
+.fineprint { font-size: 12px; color: var(--text-dim); line-height: 1.9; letter-spacing: 0.06em; }
 .error-text { font-size: 13px; color: #e08a75; line-height: 1.8; max-width: min(520px, 90vw); }
 
 /* パネル */
 .panel {
   width: min(480px, 92vw);
   border: 1px solid rgba(201, 162, 75, 0.35);
-  background: rgba(20, 16, 12, 0.72);
+  background: var(--panel-bg);
   padding: 20px 22px;
   display: flex;
   flex-direction: column;
@@ -173,10 +213,10 @@ html, body {
 }
 .song-actions { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
 .song-name { font-size: 17px; letter-spacing: 0.08em; }
-.song-meta { font-size: 13px; color: var(--washi-dim); letter-spacing: 0.06em; line-height: 1.8; }
+.song-meta { font-size: 13px; color: var(--text-dim); letter-spacing: 0.06em; line-height: 1.8; }
 .song-info-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 
-.row-label { font-size: 13px; color: var(--washi-dim); letter-spacing: 0.1em; }
+.row-label { font-size: 13px; color: var(--text-dim); letter-spacing: 0.1em; }
 .density-row, .setting-row { display: flex; flex-direction: column; gap: 8px; align-items: center; }
 
 /* セグメントボタン */
@@ -185,7 +225,7 @@ html, body {
   font-family: var(--serif);
   font-size: 13.5px;
   letter-spacing: 0.12em;
-  color: var(--washi-dim);
+  color: var(--text-dim);
   background: transparent;
   border: none;
   padding: 8px 18px;
@@ -223,7 +263,7 @@ html, body {
 .hud-score {
   font-size: 30px;
   letter-spacing: 0.12em;
-  color: var(--washi);
+  color: var(--text);
   text-shadow: 0 0 14px rgba(201, 162, 75, 0.5), 0 1px 2px #000;
   font-variant-numeric: tabular-nums;
 }
@@ -240,7 +280,7 @@ html, body {
   letter-spacing: 0.05em;
   animation: combo-pop 0.18s ease-out;
 }
-.hud-combo small { font-size: 20px; margin-left: 4px; color: var(--washi-dim); }
+.hud-combo small { font-size: 20px; margin-left: 4px; color: var(--text-dim); }
 @keyframes combo-pop {
   from { transform: translate(-50%, -50%) scale(1.25); }
   to { transform: translate(-50%, -50%) scale(1); }
@@ -261,7 +301,8 @@ html, body {
   right: 0;
   display: flex;
   justify-content: space-around;
-  color: rgba(232, 224, 207, 0.4);
+  color: var(--text-dim);
+  opacity: 0.55;
   font-size: 18px;
   letter-spacing: 0.1em;
 }
@@ -279,7 +320,7 @@ html, body {
 }
 .judge-pop.perfect { color: var(--kin); text-shadow: 0 0 16px rgba(201, 162, 75, 0.8), 0 1px 3px #000; }
 .judge-pop.good { color: #a8bfdc; }
-.judge-pop.miss { color: var(--sumi-usu); font-size: 20px; }
+.judge-pop.miss { color: var(--miss-color); font-size: 20px; }
 @keyframes judge-rise {
   0% { opacity: 0; transform: translate(-50%, -30%) scale(0.7); }
   20% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
@@ -294,7 +335,7 @@ html, body {
   align-items: center;
   justify-content: center;
   font-size: clamp(110px, 30vw, 220px);
-  color: var(--washi);
+  color: var(--text);
   text-shadow: 0 0 40px rgba(201, 162, 75, 0.55);
   pointer-events: none;
 }
@@ -311,7 +352,7 @@ html, body {
 .result-score { font-size: 40px; letter-spacing: 0.1em; font-variant-numeric: tabular-nums; }
 .result-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 26px; width: 100%; }
 .result-stats > div { display: flex; justify-content: space-between; gap: 12px; }
-.result-stats dt { color: var(--washi-dim); font-size: 13px; letter-spacing: 0.1em; }
+.result-stats dt { color: var(--text-dim); font-size: 13px; letter-spacing: 0.1em; }
 .result-stats dd { font-variant-numeric: tabular-nums; font-size: 15px; }
 
 /* 解析プレビュー */
@@ -335,9 +376,9 @@ html, body {
   bottom: max(30px, env(safe-area-inset-bottom));
   transform: translateX(-50%);
   max-width: min(520px, 92vw);
-  background: rgba(20, 16, 12, 0.92);
+  background: var(--panel-bg);
   border: 1px solid rgba(201, 162, 75, 0.5);
-  color: var(--washi);
+  color: var(--text);
   font-size: 13.5px;
   line-height: 1.8;
   padding: 12px 20px;
@@ -345,6 +386,20 @@ html, body {
   z-index: 30;
 }
 .toast[hidden] { display: none; }
+
+/* バージョン表記(スクショで判別できるよう常時・控えめに表示) */
+.version-tag {
+  position: absolute;
+  right: 8px;
+  bottom: max(6px, env(safe-area-inset-bottom));
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  opacity: 0.55;
+  pointer-events: none;
+  z-index: 60;
+  font-variant-numeric: tabular-nums;
+}
 
 /* デバッグ表示 */
 .debug-overlay {
@@ -386,5 +441,5 @@ html, body {
 .modal[hidden] { display: none; }
 .modal-body { gap: 20px; align-items: center; }
 .modal-body h3 { letter-spacing: 0.3em; color: var(--kin); font-weight: 500; }
-.setting-row label { font-size: 13.5px; color: var(--washi); letter-spacing: 0.08em; }
+.setting-row label { font-size: 13.5px; color: var(--text); letter-spacing: 0.08em; }
 input[type="range"] { width: min(300px, 70vw); accent-color: var(--kin); }

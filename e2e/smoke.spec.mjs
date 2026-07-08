@@ -93,6 +93,18 @@ test('設定: ヒット音の切替(試聴)と判定窓・デバッグ表示の�
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('kagemai-settings')).hitSound);
   expect(saved).toBe('none');
 
+  // 背景テーマの切替(CSS 変数と WebGL 背景の両方に反映される)
+  for (const theme of ['yoi', 'sakura', 'washi', 'sumi']) {
+    await page.locator(`#settings-theme-seg [data-theme="${theme}"]`).click();
+    await expect(page.locator('body')).toHaveAttribute('data-theme', theme);
+  }
+
+  // ヒット音量スライダー
+  await page.locator('#hitvol-slider').fill('30');
+  await expect(page.locator('#hitvol-value')).toHaveText('30%');
+  const savedVol = await page.evaluate(() => JSON.parse(localStorage.getItem('kagemai-settings')).hitVolume);
+  expect(savedVol).toBe(30);
+
   await page.locator('#window-slider').fill('200');
   await expect(page.locator('#window-value')).toHaveText('±200ms');
   await page.locator('#debug-toggle').check();
@@ -101,6 +113,18 @@ test('設定: ヒット音の切替(試聴)と判定窓・デバッグ表示の�
   await page.locator('#btn-settings-close').click();
   await expect(page.locator('#settings-modal')).toBeHidden();
   expect(errors).toEqual([]);
+});
+
+test('バージョン表記が常時表示されている', async ({ page }) => {
+  await page.goto('/');
+  const tag = page.locator('#version-tag');
+  await expect(tag).toBeVisible();
+  await expect(tag).toHaveText(/^影舞 v\d+\.\d+\.\d+$/);
+  // 画面遷移後も表示され続ける
+  await page.getByTestId('start').click();
+  await expect(tag).toBeVisible();
+  const hookVersion = await page.evaluate(() => window.__kagemai.version);
+  expect(`影舞 v${hookVersion}`).toBe(await tag.textContent());
 });
 
 test('リトライで再プレイできる(中断→曲選択にも戻れる)', async ({ page }) => {

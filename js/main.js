@@ -9,6 +9,7 @@ import { UI } from './ui.js';
 import { Game } from './game.js';
 import { renderDemoSong } from './demo-song.js';
 import { generateChart, beatsFromBpm } from './core/chart.js';
+import { VERSION } from './version.js';
 
 const params = new URLSearchParams(location.search);
 
@@ -21,6 +22,8 @@ const DEFAULT_SETTINGS = {
   judgeRadius: 0.09,
   minSwipeSpeed: 1.0,
   hitSound: 'suzu',
+  hitVolume: 80,
+  theme: 'sumi',
 };
 function loadSettings() {
   try {
@@ -35,7 +38,7 @@ function saveSettings() {
 const settings = loadSettings();
 
 // ---- E2E/デバッグ用フック ----
-window.__kagemai = { screen: null, errors: [], settings };
+window.__kagemai = { screen: null, errors: [], settings, version: VERSION };
 window.addEventListener('error', (e) => window.__kagemai.errors.push(String(e.message)));
 window.addEventListener('unhandledrejection', (e) => window.__kagemai.errors.push(String(e.reason)));
 
@@ -430,18 +433,49 @@ function syncSettingsUi() {
   for (const b of document.querySelectorAll('#settings-hitsound-seg .seg-btn')) {
     b.classList.toggle('is-active', b.dataset.hitsound === settings.hitSound);
   }
+  for (const b of document.querySelectorAll('#settings-theme-seg .seg-btn')) {
+    b.classList.toggle('is-active', b.dataset.theme === settings.theme);
+  }
   const slider = document.getElementById('window-slider');
   slider.value = String(settings.judgeWindowMs);
   document.getElementById('window-value').textContent = `±${settings.judgeWindowMs}ms`;
+  const hitvol = document.getElementById('hitvol-slider');
+  hitvol.value = String(settings.hitVolume);
+  document.getElementById('hitvol-value').textContent = `${settings.hitVolume}%`;
   document.getElementById('debug-toggle').checked = settings.debug;
 }
+
+document.getElementById('hitvol-slider').addEventListener('input', (e) => {
+  settings.hitVolume = Number(e.target.value);
+  document.getElementById('hitvol-value').textContent = `${settings.hitVolume}%`;
+  saveSettings();
+});
+// スライダーを離した時に現在の音量で試聴
+document.getElementById('hitvol-slider').addEventListener('change', () => {
+  audio.hitSound(settings.hitSound === 'none' ? 'suzu' : settings.hitSound, 'perfect', settings.hitVolume / 100);
+});
 
 for (const b of document.querySelectorAll('#settings-hitsound-seg .seg-btn')) {
   b.addEventListener('click', () => {
     settings.hitSound = b.dataset.hitsound;
     saveSettings();
     syncSettingsUi();
-    audio.hitSound(settings.hitSound, 'perfect'); // 試聴
+    audio.hitSound(settings.hitSound, 'perfect', settings.hitVolume / 100); // 試聴
+  });
+}
+
+/** 背景テーマを UI(CSS変数)と WebGL 背景の両方に適用する */
+function applyTheme() {
+  document.body.dataset.theme = settings.theme;
+  stage.setTheme(settings.theme);
+}
+
+for (const b of document.querySelectorAll('#settings-theme-seg .seg-btn')) {
+  b.addEventListener('click', () => {
+    settings.theme = b.dataset.theme;
+    saveSettings();
+    syncSettingsUi();
+    applyTheme();
   });
 }
 
@@ -482,5 +516,7 @@ function hashStr(s) {
 }
 
 // ---- 起動 ----
+document.getElementById('version-tag').textContent = `影舞 v${VERSION}`;
+applyTheme();
 ui.setDebugVisible(settings.debug);
 showScreen('title');
