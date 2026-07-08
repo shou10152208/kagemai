@@ -249,11 +249,13 @@ function startPreview() {
   const ctx = audio.ensure();
   const startAt = ctx.currentTime + 0.4;
   const beat = 60 / s.bpm;
-  // 全ビートのクリックを AudioContext に予約(setTimeout 不使用)
+  // 全ビートのクリックを AudioContext に予約(setTimeout 不使用)。
+  // 停止時にまとめて消せるよう専用バスに出力する。
+  const clickBus = audio.createBus();
   let n = 0;
   for (let k = 0, t = s.offset; t < s.duration; k++, t = s.offset + k * beat) {
     if (t < 0) continue;
-    audio.click(startAt + t, k % 4 === 0);
+    audio.click(startAt + t, k % 4 === 0, clickBus.node);
     n++;
   }
   document.getElementById('preview-status').textContent =
@@ -271,6 +273,7 @@ function startPreview() {
   previewCleanup = () => {
     cancelAnimationFrame(raf);
     handle.stop();
+    clickBus.stop(); // 予約済みのクリック音もまとめて止める
     lamp.classList.remove('on');
   };
 }

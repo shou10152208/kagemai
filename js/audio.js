@@ -75,8 +75,23 @@ export class AudioEngine {
     }
   }
 
+  /**
+   * 予約音(ビープ/クリック)用のバスを作る。
+   * 予約済みの音をまとめて止めたい場面では、このバスに出力しておき
+   * stop()(=切断)する。オシレータ個別の stop 管理は不要になる。
+   */
+  createBus() {
+    const ctx = this.ensure();
+    const gain = ctx.createGain();
+    gain.connect(this.master);
+    return {
+      node: gain,
+      stop: () => { try { gain.disconnect(); } catch { /* 切断済み */ } },
+    };
+  }
+
   /** 短いビープ(カウントダウン等)を絶対時刻 time に予約する */
-  beep(time, { freq = 880, dur = 0.09, gain = 0.25, type = 'sine' } = {}) {
+  beep(time, { freq = 880, dur = 0.09, gain = 0.25, type = 'sine', out = null } = {}) {
     const ctx = this.ensure();
     const t = Math.max(time, ctx.currentTime);
     const osc = ctx.createOscillator();
@@ -87,13 +102,13 @@ export class AudioEngine {
     g.gain.linearRampToValueAtTime(gain, t + 0.005);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     osc.connect(g);
-    g.connect(this.master);
+    g.connect(out || this.master);
     osc.start(t);
     osc.stop(t + dur + 0.05);
   }
 
   /** ビート検証用クリック音 */
-  click(time, accent = false) {
-    this.beep(time, { freq: accent ? 1800 : 1200, dur: 0.04, gain: 0.5, type: 'square' });
+  click(time, accent = false, out = null) {
+    this.beep(time, { freq: accent ? 1800 : 1200, dur: 0.04, gain: 0.5, type: 'square', out });
   }
 }

@@ -53,11 +53,13 @@ export class Game {
     this.songStartAt = ctx.currentTime + COUNT_IN;
     this.handle = this.audio.playBufferAt(buffer, this.songStartAt);
 
-    // カウントダウンの音(拍に合わせて3回+開始音)
+    // カウントダウンの音(拍に合わせて3回+開始音)。
+    // 中断時に予約分もまとめて止められるよう専用バスに出力する。
+    this._beepBus = this.audio.createBus();
     for (let i = 3; i >= 1; i--) {
-      this.audio.beep(this.songStartAt - i * 1.0, { freq: 660, dur: 0.1, gain: 0.2 });
+      this.audio.beep(this.songStartAt - i * 1.0, { freq: 660, dur: 0.1, gain: 0.2, out: this._beepBus.node });
     }
-    this.audio.beep(this.songStartAt, { freq: 1320, dur: 0.15, gain: 0.25 });
+    this.audio.beep(this.songStartAt, { freq: 1320, dur: 0.15, gain: 0.25, out: this._beepBus.node });
 
     this.input.onLaneKey = (lane) => this._handleLaneKey(lane);
 
@@ -77,6 +79,7 @@ export class Game {
     this._raf = 0;
     this.running = false;
     if (this.handle) { this.handle.stop(); this.handle = null; }
+    if (this._beepBus) { this._beepBus.stop(); this._beepBus = null; }
     if (this.input) this.input.onLaneKey = null;
     if (this.stage) this.stage.clearNotes();
     if (fireCallback && this.cb.onQuit) this.cb.onQuit();
