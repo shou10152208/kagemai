@@ -516,7 +516,7 @@ function hashStr(s) {
 }
 
 // ---- 起動 ----
-document.getElementById('version-tag').textContent = `影舞 v${VERSION}`;
+document.getElementById('version-tag').textContent = `影舞 ${VERSION}`;
 applyTheme();
 ui.setDebugVisible(settings.debug);
 showScreen('title');

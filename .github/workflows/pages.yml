@@ -32,6 +32,13 @@ jobs:
           cp index.html _site/
           cp -r css js _site/
 
+      - name: バージョン情報の埋め込み(コミット短縮ハッシュ+日付)
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          BUILD_DATE="$(date -u +%Y-%m-%d)"
+          printf 'export const VERSION = "%s (%s)";\n' "$SHORT_SHA" "$BUILD_DATE" > _site/js/version.js
+          cat _site/js/version.js
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

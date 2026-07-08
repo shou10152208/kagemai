@@ -119,12 +119,13 @@ test('バージョン表記が常時表示されている', async ({ page }) => 
   await page.goto('/');
   const tag = page.locator('#version-tag');
   await expect(tag).toBeVisible();
-  await expect(tag).toHaveText(/^影舞 v\d+\.\d+\.\d+$/);
+  // ローカルは 'dev'、Pages ではデプロイ時にコミット短縮ハッシュへ書き換えられる
+  await expect(tag).toHaveText(/^影舞 (dev|[0-9a-f]{7} \(\d{4}-\d{2}-\d{2}\))$/);
   // 画面遷移後も表示され続ける
   await page.getByTestId('start').click();
   await expect(tag).toBeVisible();
   const hookVersion = await page.evaluate(() => window.__kagemai.version);
-  expect(`影舞 v${hookVersion}`).toBe(await tag.textContent());
+  expect(`影舞 ${hookVersion}`).toBe(await tag.textContent());
 });
 
 test('リトライで再プレイできる(中断→曲選択にも戻れる)', async ({ page }) => {
