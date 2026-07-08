@@ -107,6 +107,12 @@ test('設定: ヒット音の切替(試聴)と判定窓・デバッグ表示の�
 
   await page.locator('#window-slider').fill('200');
   await expect(page.locator('#window-value')).toHaveText('±200ms');
+
+  // カメラ遅延補正スライダー
+  await page.locator('#camlat-slider').fill('150');
+  await expect(page.locator('#camlat-value')).toHaveText('150ms');
+  const savedLat = await page.evaluate(() => JSON.parse(localStorage.getItem('kagemai-settings')).cameraLatencyMs);
+  expect(savedLat).toBe(150);
   await page.locator('#debug-toggle').check();
   await expect(page.locator('#debug-overlay')).toBeVisible();
 

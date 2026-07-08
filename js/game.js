@@ -31,7 +31,21 @@ export class Game {
 
   get windows() {
     const good = (this.settings.judgeWindowMs ?? 150) / 1000;
+    if (this.input.mode === 'camera') {
+      // カメラは体を動かす入力なのでタップより甘くする
+      return { perfect: Math.min(good * 0.6, 0.1), good: good * 1.2 };
+    }
     return { perfect: good / 3, good }; // 既定: good=±150ms, perfect=±50ms
+  }
+
+  /** カメラ+手検出パイプラインの遅延補正(秒)。カメラモード以外は 0 */
+  get inputLatency() {
+    return this.input.mode === 'camera' ? (this.settings.cameraLatencyMs ?? 100) / 1000 : 0;
+  }
+
+  get judgeRadius() {
+    const base = this.settings.judgeRadius ?? 0.09;
+    return this.input.mode === 'camera' ? base * 1.35 : base;
   }
 
   start({ buffer, chart, duration }) {
@@ -122,7 +136,8 @@ export class Game {
       this._live.push(this.chart[this._nextIdx++]);
     }
 
-    // 判定
+    // 判定。カメラモードでは映像+検出の遅延ぶん過去の出来事として扱う
+    const judgeTime = t - this.inputLatency;
     if (t >= 0) {
       for (const p of pointers) {
         if (!p.active) continue;
@@ -131,9 +146,9 @@ export class Game {
         let best = null;
         for (const n of this._live) {
           if (n.judged) continue;
-          const hit = judgeNoteHit(n, p, t, {
+          const hit = judgeNoteHit(n, p, judgeTime, {
             windows: W,
-            radius: this.settings.judgeRadius ?? 0.09,
+            radius: this.judgeRadius,
             aspect,
             minSwipeSpeed: this.settings.minSwipeSpeed ?? 1.0,
           });
@@ -146,9 +161,9 @@ export class Game {
       }
     }
 
-    // Miss確定
+    // Miss確定(遅延補正後の時刻基準。補正ぶんだけ判定チャンスが残る)
     for (const n of this._live) {
-      if (!n.judged && isNoteExpired(n.time, t, W)) {
+      if (!n.judged && isNoteExpired(n.time, judgeTime, W)) {
         this._applyJudge(n, JUDGE.MISS);
       }
     }
@@ -166,7 +181,8 @@ export class Game {
       progress: Math.max(0, Math.min(1, t / this.duration)),
     });
     if (this.cb.onDebug) {
-      this.cb.onDebug(`FPS ${f.value}  入力: ${this.input.mode}  ポインタ: ${pointers.length}\n` +
+      const latency = this.inputLatency > 0 ? `  遅延補正 ${Math.round(this.inputLatency * 1000)}ms` : '';
+      this.cb.onDebug(`FPS ${f.value}  入力: ${this.input.mode}  ポインタ: ${pointers.length}${latency}\n` +
         `t=${t.toFixed(2)}s  残ノーツ ${this.chart.length - this.counts.perfect - this.counts.good - this.counts.miss}`);
     }
 

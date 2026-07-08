@@ -24,6 +24,7 @@ const DEFAULT_SETTINGS = {
   hitSound: 'suzu',
   hitVolume: 80,
   theme: 'sumi',
+  cameraLatencyMs: 100,
 };
 function loadSettings() {
   try {
@@ -442,8 +443,17 @@ function syncSettingsUi() {
   const hitvol = document.getElementById('hitvol-slider');
   hitvol.value = String(settings.hitVolume);
   document.getElementById('hitvol-value').textContent = `${settings.hitVolume}%`;
+  const camlat = document.getElementById('camlat-slider');
+  camlat.value = String(settings.cameraLatencyMs);
+  document.getElementById('camlat-value').textContent = `${settings.cameraLatencyMs}ms`;
   document.getElementById('debug-toggle').checked = settings.debug;
 }
+
+document.getElementById('camlat-slider').addEventListener('input', (e) => {
+  settings.cameraLatencyMs = Number(e.target.value);
+  document.getElementById('camlat-value').textContent = `${settings.cameraLatencyMs}ms`;
+  saveSettings();
+});
 
 document.getElementById('hitvol-slider').addEventListener('input', (e) => {
   settings.hitVolume = Number(e.target.value);
