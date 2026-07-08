@@ -74,6 +74,66 @@ test('起動 → デモ曲(短縮版) → マウスモードでプレイ → リ
   expect(errors).toEqual([]);
 });
 
+test('設定: ヒット音の切替(試聴)と判定窓・デバッグ表示の操作', async ({ page }) => {
+  const errors = watchErrors(page);
+
+  await page.goto('/');
+  await page.getByTestId('start').click();
+  await page.getByTestId('mode-mouse').click();
+
+  await page.locator('#btn-settings').click();
+  await expect(page.locator('#settings-modal')).toBeVisible();
+
+  // ヒット音を順に切替(クリックごとに試聴が鳴る)
+  for (const kind of ['suzu', 'hyoshigi', 'tsuzumi', 'none']) {
+    await page.locator(`#settings-hitsound-seg [data-hitsound="${kind}"]`).click();
+    await expect(page.locator(`#settings-hitsound-seg [data-hitsound="${kind}"]`)).toHaveClass(/is-active/);
+  }
+  // 設定が保存されている
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('kagemai-settings')).hitSound);
+  expect(saved).toBe('none');
+
+  // 背景テーマの切替(CSS 変数と WebGL 背景の両方に反映される)
+  for (const theme of ['yoi', 'sakura', 'washi', 'sumi']) {
+    await page.locator(`#settings-theme-seg [data-theme="${theme}"]`).click();
+    await expect(page.locator('body')).toHaveAttribute('data-theme', theme);
+  }
+
+  // ヒット音量スライダー
+  await page.locator('#hitvol-slider').fill('30');
+  await expect(page.locator('#hitvol-value')).toHaveText('30%');
+  const savedVol = await page.evaluate(() => JSON.parse(localStorage.getItem('kagemai-settings')).hitVolume);
+  expect(savedVol).toBe(30);
+
+  await page.locator('#window-slider').fill('200');
+  await expect(page.locator('#window-value')).toHaveText('±200ms');
+
+  // カメラ遅延補正スライダー
+  await page.locator('#camlat-slider').fill('150');
+  await expect(page.locator('#camlat-value')).toHaveText('150ms');
+  const savedLat = await page.evaluate(() => JSON.parse(localStorage.getItem('kagemai-settings')).cameraLatencyMs);
+  expect(savedLat).toBe(150);
+  await page.locator('#debug-toggle').check();
+  await expect(page.locator('#debug-overlay')).toBeVisible();
+
+  await page.locator('#btn-settings-close').click();
+  await expect(page.locator('#settings-modal')).toBeHidden();
+  expect(errors).toEqual([]);
+});
+
+test('バージョン表記が常時表示されている', async ({ page }) => {
+  await page.goto('/');
+  const tag = page.locator('#version-tag');
+  await expect(tag).toBeVisible();
+  // ローカルは 'dev'、Pages ではデプロイ時にコミット短縮ハッシュへ書き換えられる
+  await expect(tag).toHaveText(/^影舞 (dev|[0-9a-f]{7} \(\d{4}-\d{2}-\d{2}\))$/);
+  // 画面遷移後も表示され続ける
+  await page.getByTestId('start').click();
+  await expect(tag).toBeVisible();
+  const hookVersion = await page.evaluate(() => window.__kagemai.version);
+  expect(`影舞 ${hookVersion}`).toBe(await tag.textContent());
+});
+
 test('リトライで再プレイできる(中断→曲選択にも戻れる)', async ({ page }) => {
   const errors = watchErrors(page);
 

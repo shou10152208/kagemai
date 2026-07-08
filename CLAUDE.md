@@ -50,6 +50,11 @@ import される。ビート解析・BPM推定・譜面生成・判定計算を�
   (`display` を持つクラスを足しても壊れない)
 - E2E は CDN アセットを `e2e/support/cdn.mjs` でローカルキャッシュから返す
   (決定性のため。新しい CDN 依存を足したら `CDN_ASSETS` に追記する)
+- `js/version.js` の `VERSION` は手で編集しない。リポジトリ上は常に `'dev'` で、
+  Pages デプロイ時に `pages.yml` がコミット短縮ハッシュ+日付へ書き換える
+  (画面右下に常時表示され、スクリーンショットからバージョンを特定できる)
+- 背景テーマは CSS(`body[data-theme]` の変数)と WebGL(`render.js` の `THEMES`)の
+  両方に定義がある。テーマを足す時は両方+設定UIに追記する
 
 ## コマンド
 

@@ -23,14 +23,22 @@ function makeDabTexture(size = 128) {
   return new THREE.CanvasTexture(c);
 }
 
-function makeBgTexture() {
+// 背景テーマ(非カメラモードのWebGL背景。UI側の色は CSS の body[data-theme])
+export const THEMES = {
+  sumi:   { label: '墨',   stops: ['#221c14', '#171310', '#0b0908'], dust: 0xc9a24b, blobColor: 0x000000, blobOpacity: 0.4 },
+  yoi:    { label: '宵',   stops: ['#26304e', '#181f36', '#0b0e1c'], dust: 0x9db8e8, blobColor: 0x060a18, blobOpacity: 0.35 },
+  sakura: { label: '桜',   stops: ['#f7e9eb', '#f0d8dd', '#e2bfc9'], dust: 0xd98da0, blobColor: 0xf8b8c8, blobOpacity: 0.3 },
+  washi:  { label: '和紙', stops: ['#f4eddd', '#ece2cb', '#dccfae'], dust: 0xb08d3e, blobColor: 0xd8c8a0, blobOpacity: 0.3 },
+};
+
+function makeBgTexture(stops) {
   const c = document.createElement('canvas');
   c.width = 64; c.height = 512;
   const g = c.getContext('2d');
   const grad = g.createLinearGradient(0, 0, 0, 512);
-  grad.addColorStop(0, '#221c14');
-  grad.addColorStop(0.45, '#171310');
-  grad.addColorStop(1, '#0b0908');
+  grad.addColorStop(0, stops[0]);
+  grad.addColorStop(0.45, stops[1]);
+  grad.addColorStop(1, stops[2]);
   g.fillStyle = grad;
   g.fillRect(0, 0, 64, 512);
   return new THREE.CanvasTexture(c);
@@ -110,10 +118,25 @@ export class Stage {
   }
 
   // ---- 背景(非カメラモード) ----
+  /** 背景テーマを切り替える(name: THEMES のキー) */
+  setTheme(name) {
+    const theme = THEMES[name] || THEMES.sumi;
+    this._theme = theme;
+    const old = this.bgPlane.material.map;
+    this.bgPlane.material.map = makeBgTexture(theme.stops);
+    this.bgPlane.material.needsUpdate = true;
+    if (old) old.dispose();
+    this.dust.material.color.setHex(theme.dust);
+    for (const b of this.inkBlobs) {
+      b.material.color.setHex(theme.blobColor);
+      b.material.opacity = theme.blobOpacity;
+    }
+  }
+
   _buildBackground() {
     this.bgPlane = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
-      new THREE.MeshBasicMaterial({ map: makeBgTexture(), depthWrite: false }),
+      new THREE.MeshBasicMaterial({ map: makeBgTexture(THEMES.sumi.stops), depthWrite: false }),
     );
     this.bgPlane.position.z = -80;
     this.bgGroup.add(this.bgPlane);

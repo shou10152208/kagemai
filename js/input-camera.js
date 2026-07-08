@@ -5,9 +5,9 @@
 const VISION_CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
 const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
-const POS_SMOOTH = 0.55;   // 位置の平滑化係数
 const VEL_SMOOTH = 0.5;    // 速度の平滑化係数
 const LOST_TIMEOUT = 350;  // 手を見失ってからポインタを消すまで (ms)
+const LOOKAHEAD = 0.08;    // 先読み秒数(検出遅延を速度外挿で補う)
 
 function mapGetUserMediaError(e) {
   switch (e && e.name) {
@@ -147,21 +147,28 @@ export class CameraSource {
 
       let p = this.pointers.get(key);
       if (!p) {
-        p = { id: `cam${key}`, hand: key, x, y, vx: 0, vy: 0, active: true, _t: nowMs };
+        p = { id: `cam${key}`, hand: key, x, y, vx: 0, vy: 0, active: true, _t: nowMs, _sx: x, _sy: y };
         this.pointers.set(key, p);
       } else {
         const dt = (nowMs - p._t) / 1000;
         if (dt > 0.001) {
-          const nx = p.x + (x - p.x) * POS_SMOOTH;
-          const ny = p.y + (y - p.y) * POS_SMOOTH;
-          const nvx = ((nx - p.x) * aspect) / dt;
-          const nvy = (ny - p.y) / dt;
+          // 適応スムージング: 速い動きほど追従を優先して遅れを減らし、
+          // 静止時は強めに平滑化して手ブレを消す(One Euro フィルタの簡易版)
+          const speed = Math.hypot(p.vx, p.vy);
+          const alpha = Math.min(0.85, 0.35 + speed * 0.25);
+          const nsx = p._sx + (x - p._sx) * alpha;
+          const nsy = p._sy + (y - p._sy) * alpha;
+          const nvx = ((nsx - p._sx) * aspect) / dt;
+          const nvy = (nsy - p._sy) / dt;
           p.vx += (nvx - p.vx) * VEL_SMOOTH;
           p.vy += (nvy - p.vy) * VEL_SMOOTH;
-          p.x = nx;
-          p.y = ny;
+          p._sx = nsx;
+          p._sy = nsy;
           p._t = nowMs;
         }
+        // カメラ+検出の遅延ぶんを速度で外挿した位置を公開する
+        p.x = p._sx + (p.vx / aspect) * LOOKAHEAD;
+        p.y = p._sy + p.vy * LOOKAHEAD;
       }
       this._lastSeen[key] = nowMs;
     }

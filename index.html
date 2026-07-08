@@ -159,6 +159,7 @@
 
   <!-- 共通オーバーレイ -->
   <div id="countdown" class="countdown" hidden></div>
+  <div id="version-tag" class="version-tag"></div>
   <div id="judge-layer"></div>
   <div id="toast" class="toast" hidden></div>
   <div id="debug-overlay" class="debug-overlay" hidden></div>
@@ -176,8 +177,35 @@
         </div>
       </div>
       <div class="setting-row">
+        <span class="row-label">背景の色</span>
+        <div class="seg" id="settings-theme-seg">
+          <button class="seg-btn" data-theme="sumi">墨</button>
+          <button class="seg-btn" data-theme="yoi">宵</button>
+          <button class="seg-btn" data-theme="sakura">桜</button>
+          <button class="seg-btn" data-theme="washi">和紙</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <span class="row-label">ヒット音(押すと試聴)</span>
+        <div class="seg" id="settings-hitsound-seg">
+          <button class="seg-btn" data-hitsound="none">なし</button>
+          <button class="seg-btn" data-hitsound="suzu">鈴</button>
+          <button class="seg-btn" data-hitsound="hyoshigi">拍子木</button>
+          <button class="seg-btn" data-hitsound="tsuzumi">鼓</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <span class="row-label">ヒット音量 <span id="hitvol-value"></span></span>
+        <input id="hitvol-slider" type="range" min="0" max="100" step="10">
+      </div>
+      <div class="setting-row">
         <span class="row-label">判定のゆるさ <span id="window-value"></span></span>
         <input id="window-slider" type="range" min="100" max="250" step="10">
+      </div>
+      <div class="setting-row">
+        <span class="row-label">カメラ遅延補正 <span id="camlat-value"></span></span>
+        <input id="camlat-slider" type="range" min="0" max="300" step="10">
+        <span class="fineprint">カメラモードで判定が遅れて感じる時に増やす</span>
       </div>
       <div class="setting-row">
         <label><input id="debug-toggle" type="checkbox"> デバッグ表示(FPS・入力モード)</label>
