@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#14100c">
+<title>影舞 kagemai — インカメラで遊ぶMRリズムゲーム</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='42' fill='%2314100c' stroke='%23c9a24b' stroke-width='6'/></svg>">
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+
+<video id="camera-video" autoplay muted playsinline hidden></video>
+<canvas id="stage"></canvas>
+
+<div id="ui">
+
+  <!-- タイトル -->
+  <section id="screen-title" class="screen">
+    <div class="title-block">
+      <h1 class="game-title">影舞</h1>
+      <p class="game-subtitle">kagemai — 影の中の自分と遊ぶ</p>
+      <button id="btn-start" class="btn btn-primary" data-testid="start">はじめる</button>
+      <p class="fineprint">音が鳴ります。イヤホンなしでもお楽しみいただけます。</p>
+    </div>
+  </section>
+
+  <!-- 入力モード確認 -->
+  <section id="screen-mode" class="screen" hidden>
+    <h2 class="screen-heading">遊び方をえらぶ</h2>
+    <div class="mode-list">
+      <button class="btn mode-btn" data-mode="camera" data-testid="mode-camera">
+        <span class="mode-name">カメラ</span>
+        <span class="mode-desc">インカメラに映る自分の手で舞う(推奨)</span>
+        <span class="mode-badge" hidden>おすすめ</span>
+      </button>
+      <button class="btn mode-btn" data-mode="touch" data-testid="mode-touch">
+        <span class="mode-name">タッチ</span>
+        <span class="mode-desc">画面のノーツを直接なぞる・叩く</span>
+        <span class="mode-badge" hidden>おすすめ</span>
+      </button>
+      <button class="btn mode-btn" data-mode="mouse" data-testid="mode-mouse">
+        <span class="mode-name">マウス・キーボード</span>
+        <span class="mode-desc">マウスでなぞる/クリック、または D・F・J・K</span>
+        <span class="mode-badge" hidden>おすすめ</span>
+      </button>
+    </div>
+    <p id="mode-note" class="fineprint"></p>
+  </section>
+
+  <!-- 曲選択 -->
+  <section id="screen-song" class="screen" hidden>
+    <h2 class="screen-heading">曲をえらぶ</h2>
+    <div class="song-actions">
+      <button id="btn-demo" class="btn" data-testid="demo-song">内蔵デモ曲で遊ぶ</button>
+      <label class="btn file-btn" id="file-label" hidden>
+        <span>音楽ファイルをえらぶ</span>
+        <input id="file-input" type="file" accept="audio/*,video/mp4,video/quicktime,.mp3,.m4a,.aac,.wav,.mp4,.mov" hidden>
+      </label>
+    </div>
+    <p class="fineprint" id="drm-note" hidden>
+      Apple Music などサブスクリプションの曲(DRM付き)は読み込めません。<br>
+      「ファイル」App 等に保存した音源ファイルを選んでください。mp4/mov の音声トラックも使えます。
+    </p>
+
+    <div id="analysis-progress" class="panel" hidden>
+      <p id="analysis-label">解析中…</p>
+      <div class="progress-track"><div id="analysis-bar" class="progress-bar"></div></div>
+    </div>
+
+    <div id="song-info" class="panel" hidden>
+      <p id="song-name" class="song-name"></p>
+      <p id="song-meta" class="song-meta"></p>
+      <div class="density-row">
+        <span class="row-label">ノーツ密度</span>
+        <div class="seg" id="density-seg">
+          <button class="seg-btn" data-density="low">少なめ</button>
+          <button class="seg-btn is-active" data-density="normal">普通</button>
+          <button class="seg-btn" data-density="high">多め</button>
+        </div>
+      </div>
+      <div class="song-info-actions">
+        <button id="btn-preview" class="btn btn-small" hidden>解析プレビュー</button>
+        <button id="btn-to-difficulty" class="btn btn-primary" data-testid="to-difficulty">難易度をえらぶ</button>
+      </div>
+    </div>
+    <p id="song-error" class="error-text" hidden></p>
+  </section>
+
+  <!-- 解析プレビュー -->
+  <section id="screen-preview" class="screen" hidden>
+    <h2 class="screen-heading">解析プレビュー</h2>
+    <p class="fineprint">検出したビート位置でクリック音を重ねて再生します。</p>
+    <div class="beat-lamp" id="beat-lamp"></div>
+    <p id="preview-status" class="song-meta"></p>
+    <button id="btn-preview-stop" class="btn">とめる</button>
+  </section>
+
+  <!-- 難易度選択 -->
+  <section id="screen-difficulty" class="screen" hidden>
+    <h2 class="screen-heading">難易度をえらぶ</h2>
+    <div class="mode-list">
+      <button class="btn mode-btn" data-difficulty="normal" data-testid="difficulty-normal">
+        <span class="mode-name">通常 — 舞</span>
+        <span class="mode-desc">ノーツに触れるだけで良い</span>
+      </button>
+      <button class="btn mode-btn" data-difficulty="hard" data-testid="difficulty-hard">
+        <span class="mode-name">高難度 — 乱舞</span>
+        <span class="mode-desc">矢印ノーツは指定方向へ素早く払う</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- カメラ立ち位置ガイド -->
+  <section id="screen-guide" class="screen" hidden>
+    <h2 class="screen-heading">立ち位置をあわせる</h2>
+    <p class="fineprint">上半身と両手が映る位置に立ってください。</p>
+    <p id="guide-status" class="guide-status">カメラを準備中…</p>
+    <div class="song-info-actions">
+      <button id="btn-guide-start" class="btn btn-primary" disabled>舞いはじめる</button>
+      <button id="btn-guide-back" class="btn btn-small">もどる</button>
+    </div>
+  </section>
+
+  <!-- プレイHUD -->
+  <section id="screen-play" class="screen screen-hud" hidden>
+    <div class="hud-top">
+      <div id="hud-score" class="hud-score">0</div>
+      <div class="progress-track hud-progress"><div id="hud-progress-bar" class="progress-bar"></div></div>
+    </div>
+    <div id="hud-combo" class="hud-combo" hidden><span id="hud-combo-n">0</span><small>連</small></div>
+    <div id="lane-labels" class="lane-labels" hidden>
+      <span>D</span><span>F</span><span>J</span><span>K</span>
+    </div>
+    <button id="btn-quit" class="btn btn-ghost btn-quit">中断</button>
+  </section>
+
+  <!-- リザルト -->
+  <section id="screen-result" class="screen" hidden>
+    <h2 class="screen-heading">舞い納め</h2>
+    <div class="panel result-panel">
+      <div id="result-rank" class="result-rank">—</div>
+      <div id="result-score" class="result-score" data-testid="result-score">0</div>
+      <dl class="result-stats">
+        <div><dt>極 PERFECT</dt><dd id="result-perfect">0</dd></div>
+        <div><dt>良 GOOD</dt><dd id="result-good">0</dd></div>
+        <div><dt>逸 MISS</dt><dd id="result-miss">0</dd></div>
+        <div><dt>最大コンボ</dt><dd id="result-maxcombo">0</dd></div>
+      </dl>
+    </div>
+    <div class="song-info-actions">
+      <button id="btn-retry" class="btn btn-primary" data-testid="retry">もういちど</button>
+      <button id="btn-to-song" class="btn" data-testid="back-to-song">曲をえらびなおす</button>
+    </div>
+  </section>
+
+  <!-- 共通オーバーレイ -->
+  <div id="countdown" class="countdown" hidden></div>
+  <div id="judge-layer"></div>
+  <div id="toast" class="toast" hidden></div>
+  <div id="debug-overlay" class="debug-overlay" hidden></div>
+
+  <button id="btn-settings" class="btn btn-ghost btn-gear" title="設定" hidden>設</button>
+  <div id="settings-modal" class="modal" hidden>
+    <div class="modal-body panel">
+      <h3>設定</h3>
+      <div class="setting-row">
+        <span class="row-label">入力モード</span>
+        <div class="seg" id="settings-mode-seg">
+          <button class="seg-btn" data-mode="camera">カメラ</button>
+          <button class="seg-btn" data-mode="touch">タッチ</button>
+          <button class="seg-btn" data-mode="mouse">マウス</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <span class="row-label">判定のゆるさ <span id="window-value"></span></span>
+        <input id="window-slider" type="range" min="100" max="250" step="10">
+      </div>
+      <div class="setting-row">
+        <label><input id="debug-toggle" type="checkbox"> デバッグ表示(FPS・入力モード)</label>
+      </div>
+      <button id="btn-settings-close" class="btn btn-small">とじる</button>
+    </div>
+  </div>
+
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
