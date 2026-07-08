@@ -25,6 +25,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/configure-pages@v5
+        with:
+          # リポジトリで Pages が未有効でも自動で有効化する(Source: GitHub Actions)
+          enablement: true
 
       - name: 配信ファイルの収集(静的サイトのみ)
         run: |
