@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 依存関係のインストール
+        run: npm ci
+
+      - name: ユニットテスト(純粋関数)
+        run: npm test
+
+      - name: Playwright Chromium のインストール
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E スモークテスト(ダミーカメラ)
+        run: npm run e2e
+        env:
+          CI: true
+
+      - name: テスト結果のアップロード(失敗時)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: test-results/
+          retention-days: 7

@@ -33,15 +33,18 @@ export class UI {
     this.$('hud-score').textContent = String(score);
     const comboEl = this.$('hud-combo');
     if (combo >= 3) {
-      this.$('hud-combo-n').textContent = String(combo);
-      if (comboEl.hidden) comboEl.hidden = false;
-      // アニメ再発火
-      comboEl.style.animation = 'none';
-      void comboEl.offsetWidth;
-      comboEl.style.animation = '';
+      if (combo !== this._lastCombo) {
+        this.$('hud-combo-n').textContent = String(combo);
+        comboEl.hidden = false;
+        // コンボ数が変わった時だけポップアニメを再発火
+        comboEl.style.animation = 'none';
+        void comboEl.offsetWidth;
+        comboEl.style.animation = '';
+      }
     } else {
       comboEl.hidden = true;
     }
+    this._lastCombo = combo;
     this.$('hud-progress-bar').style.width = `${(progress * 100).toFixed(1)}%`;
   }
 
