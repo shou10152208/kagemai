@@ -25,6 +25,7 @@ const DEFAULT_SETTINGS = {
   hitVolume: 80,
   theme: 'sumi',
   cameraLatencyMs: 100,
+  audioOffsetMs: 0,
 };
 function loadSettings() {
   try {
@@ -203,13 +204,20 @@ function analyzeInWorker(buffer, onProgress) {
   });
 }
 
+/** 解析グリッドの微調整(プレビューで合わせたズレ)込みのオフセット */
+function songOffset() {
+  const s = state.song;
+  return s.offset + (s.nudgeMs ?? 0) / 1000;
+}
+
 function currentChart(difficulty = state.difficulty) {
   const s = state.song;
+  const nudge = (s.nudgeMs ?? 0) / 1000;
   return generateChart({
     duration: s.duration,
     bpm: s.bpm,
-    offset: s.offset,
-    onsets: s.onsets,
+    offset: songOffset(),
+    onsets: (s.onsets || []).map((o) => ({ ...o, time: o.time + nudge })),
     density: settings.density,
     difficulty,
     seed: hashStr(s.name),
@@ -254,23 +262,25 @@ function startPreview() {
   const ctx = audio.ensure();
   const startAt = ctx.currentTime + 0.4;
   const beat = 60 / s.bpm;
+  const offset = songOffset();
   // 全ビートのクリックを AudioContext に予約(setTimeout 不使用)。
   // 停止時にまとめて消せるよう専用バスに出力する。
   const clickBus = audio.createBus();
   let n = 0;
-  for (let k = 0, t = s.offset; t < s.duration; k++, t = s.offset + k * beat) {
+  for (let k = 0, t = offset; t < s.duration; k++, t = offset + k * beat) {
     if (t < 0) continue;
     audio.click(startAt + t, k % 4 === 0, clickBus.node);
     n++;
   }
+  const nudge = s.nudgeMs ?? 0;
   document.getElementById('preview-status').textContent =
-    `推定BPM ${s.bpm.toFixed(1)} ／ ビート数 ${n} ／ グリッド開始 ${s.offset.toFixed(2)}s`;
+    `推定BPM ${s.bpm.toFixed(1)} ／ ビート数 ${n} ／ 微調整 ${nudge > 0 ? '+' : ''}${nudge}ms`;
   const handle = audio.playBufferAt(s.buffer, startAt, { onended: () => stopPreview() });
   const lamp = document.getElementById('beat-lamp');
   let raf = 0;
   const loop = () => {
     raf = requestAnimationFrame(loop);
-    const t = ctx.currentTime - startAt - s.offset;
+    const t = ctx.currentTime - startAt - offset;
     const phase = ((t / beat) % 1 + 1) % 1;
     lamp.classList.toggle('on', t >= 0 && phase < 0.18);
   };
@@ -283,10 +293,119 @@ function startPreview() {
   };
 }
 
+/** グリッド微調整: プレビュー再生中なら新しい値で自動的にかけ直す */
+function nudgeGrid(deltaMs) {
+  const s = state.song;
+  if (!s) return;
+  s.nudgeMs = Math.max(-200, Math.min(200, (s.nudgeMs ?? 0) + deltaMs));
+  if (previewCleanup) { previewCleanup(); previewCleanup = null; }
+  startPreview();
+}
+ui.bind('btn-nudge-early', () => nudgeGrid(-20));
+ui.bind('btn-nudge-late', () => nudgeGrid(20));
+
 function stopPreview() {
   if (previewCleanup) { previewCleanup(); previewCleanup = null; }
   if (ui.current === 'preview') showScreen('song');
 }
+
+// ---- タイミング校正(タップで端末の音の遅れを測る) ----
+let calibCleanup = null;
+let calibReturnScreen = 'mode';
+
+function startCalibration() {
+  if (ui.current !== 'calibration') {
+    calibReturnScreen = ['song', 'mode', 'difficulty', 'result'].includes(ui.current) ? ui.current : 'mode';
+  }
+  document.getElementById('settings-modal').hidden = true;
+  showScreen('calibration');
+
+  const ctx = audio.ensure();
+  const bus = audio.createBus();
+  const beat = 0.6; // 100 BPM
+  const first = ctx.currentTime + 1.2;
+  const totalBeats = 20;
+  for (let i = 0; i < totalBeats; i++) {
+    audio.beep(first + i * beat, { freq: 880, dur: 0.08, gain: 0.4, out: bus.node });
+  }
+
+  const statusEl = document.getElementById('calib-status');
+  const lamp = document.getElementById('calib-lamp');
+  const doneBtn = document.getElementById('btn-calib-done');
+  const retryBtn = document.getElementById('btn-calib-retry');
+  doneBtn.hidden = true;
+  retryBtn.hidden = true;
+  statusEl.textContent = 'まもなく音が始まります…';
+
+  const PRACTICE = 2;
+  const NEEDED = 8;
+  const taps = [];
+  let result = null;
+
+  const onTap = (e) => {
+    if (e.target.closest('button')) return; // ボタン操作は計測しない
+    const now = audio.now;
+    const k = Math.round((now - first) / beat);
+    if (k < 0 || k >= totalBeats || result !== null) return;
+    const diff = (now - (first + k * beat)) * 1000;
+    if (Math.abs(diff) > 280) return; // ビートから離れすぎたタップは無視
+    taps.push(diff);
+    const measured = Math.max(0, taps.length - PRACTICE);
+    if (taps.length <= PRACTICE) {
+      statusEl.textContent = `練習 ${taps.length}/${PRACTICE}`;
+    } else if (measured < NEEDED) {
+      statusEl.textContent = `計測中 ${measured}/${NEEDED}`;
+    }
+    if (measured >= NEEDED) {
+      const samples = taps.slice(PRACTICE).sort((a, b) => a - b);
+      result = Math.round(samples[Math.floor(samples.length / 2)] / 10) * 10;
+      statusEl.textContent = `あなたの端末では音が約 ${result}ms ${result >= 0 ? '遅れて' : '早く'}聞こえています`;
+      doneBtn.hidden = false;
+      retryBtn.hidden = false;
+      bus.stop();
+    }
+  };
+  const onKey = (e) => {
+    if (e.code === 'Space') { e.preventDefault(); onTap(e); }
+  };
+  window.addEventListener('pointerdown', onTap);
+  window.addEventListener('keydown', onKey);
+
+  let raf = 0;
+  const loop = () => {
+    raf = requestAnimationFrame(loop);
+    const t = audio.now - first;
+    const phase = ((t / beat) % 1 + 1) % 1;
+    lamp.classList.toggle('on', t >= 0 && t < totalBeats * beat && phase < 0.18);
+  };
+  raf = requestAnimationFrame(loop);
+
+  doneBtn.onclick = () => {
+    if (result !== null) {
+      settings.audioOffsetMs = result;
+      saveSettings();
+      ui.toast(`タイミング調整を ${result}ms に設定しました`);
+    }
+    stopCalibration();
+  };
+  calibCleanup = () => {
+    cancelAnimationFrame(raf);
+    bus.stop();
+    window.removeEventListener('pointerdown', onTap);
+    window.removeEventListener('keydown', onKey);
+    lamp.classList.remove('on');
+    doneBtn.onclick = null;
+  };
+}
+
+function stopCalibration() {
+  if (calibCleanup) { calibCleanup(); calibCleanup = null; }
+  showScreen(calibReturnScreen);
+}
+
+ui.bind('btn-calibrate', () => startCalibration());
+ui.bind('btn-calib-retry', () => { if (calibCleanup) { calibCleanup(); calibCleanup = null; } startCalibration(); });
+ui.bind('btn-calib-back', () => stopCalibration());
 
 // ---- 難易度選択 ----
 for (const btn of document.querySelectorAll('#screen-difficulty .mode-btn')) {
@@ -446,12 +565,20 @@ function syncSettingsUi() {
   const camlat = document.getElementById('camlat-slider');
   camlat.value = String(settings.cameraLatencyMs);
   document.getElementById('camlat-value').textContent = `${settings.cameraLatencyMs}ms`;
+  const offset = document.getElementById('offset-slider');
+  offset.value = String(settings.audioOffsetMs);
+  document.getElementById('offset-value').textContent = `${settings.audioOffsetMs}ms`;
   document.getElementById('debug-toggle').checked = settings.debug;
 }
 
 document.getElementById('camlat-slider').addEventListener('input', (e) => {
   settings.cameraLatencyMs = Number(e.target.value);
   document.getElementById('camlat-value').textContent = `${settings.cameraLatencyMs}ms`;
+  saveSettings();
+});
+document.getElementById('offset-slider').addEventListener('input', (e) => {
+  settings.audioOffsetMs = Number(e.target.value);
+  document.getElementById('offset-value').textContent = `${settings.audioOffsetMs}ms`;
   saveSettings();
 });
 

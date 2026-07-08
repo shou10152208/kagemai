@@ -96,7 +96,28 @@
     <p class="fineprint">検出したビート位置でクリック音を重ねて再生します。</p>
     <div class="beat-lamp" id="beat-lamp"></div>
     <p id="preview-status" class="song-meta"></p>
+    <div class="song-info-actions">
+      <button id="btn-nudge-early" class="btn btn-small">クリックを早く −20ms</button>
+      <button id="btn-nudge-late" class="btn btn-small">遅く +20ms</button>
+    </div>
+    <p class="fineprint">クリックが曲より遅れて聞こえる場合は「早く」を押してください。調整は譜面にも反映されます。</p>
     <button id="btn-preview-stop" class="btn">とめる</button>
+  </section>
+
+  <!-- タイミング校正 -->
+  <section id="screen-calibration" class="screen" hidden>
+    <h2 class="screen-heading">タイミング校正</h2>
+    <p class="fineprint">
+      流れる音に合わせて、画面のどこでもタップ(またはスペースキー)してください。<br>
+      端末ごとの音の遅れを測って、判定タイミングを合わせます。最初の2回は練習です。
+    </p>
+    <div class="beat-lamp" id="calib-lamp"></div>
+    <p id="calib-status" class="song-meta">準備中…</p>
+    <div class="song-info-actions">
+      <button id="btn-calib-done" class="btn btn-primary" hidden data-testid="calib-done">この設定にする</button>
+      <button id="btn-calib-retry" class="btn btn-small" hidden>やりなおす</button>
+      <button id="btn-calib-back" class="btn btn-small">もどる</button>
+    </div>
   </section>
 
   <!-- 難易度選択 -->
@@ -201,6 +222,11 @@
       <div class="setting-row">
         <span class="row-label">判定のゆるさ <span id="window-value"></span></span>
         <input id="window-slider" type="range" min="100" max="250" step="10">
+      </div>
+      <div class="setting-row">
+        <span class="row-label">タイミング調整 <span id="offset-value"></span></span>
+        <input id="offset-slider" type="range" min="-300" max="300" step="10">
+        <button id="btn-calibrate" class="btn btn-small">タップで自動校正する</button>
       </div>
       <div class="setting-row">
         <span class="row-label">カメラ遅延補正 <span id="camlat-value"></span></span>

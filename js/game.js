@@ -100,7 +100,9 @@ export class Game {
   }
 
   get songTime() {
-    return this.audio.now - this.songStartAt;
+    // タイミング調整(校正値): 正の値 = 音が遅れて聞こえる端末。
+    // ゲーム時間全体(出現・描画・判定)を「耳に届く音」に合わせてずらす。
+    return this.audio.now - this.songStartAt - (this.settings.audioOffsetMs ?? 0) / 1000;
   }
 
   _tick(nowMs) {

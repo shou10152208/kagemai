@@ -41,6 +41,14 @@ test('WAV アップロード → 解析(BPM 120)→ プレビュー → プレ�
   await expect(page.locator('#screen-preview')).toBeVisible();
   await expect(page.locator('#preview-status')).toContainText('ビート数');
   await page.waitForTimeout(1500);
+
+  // グリッド微調整: ボタンで ±20ms、表示に反映され自動でかけ直される
+  await page.locator('#btn-nudge-early').click();
+  await expect(page.locator('#preview-status')).toContainText('微調整 -20ms');
+  await page.locator('#btn-nudge-late').click();
+  await page.locator('#btn-nudge-late').click();
+  await expect(page.locator('#preview-status')).toContainText('微調整 +20ms');
+
   await page.locator('#btn-preview-stop').click();
   await expect(page.locator('#screen-song')).toBeVisible();
 
