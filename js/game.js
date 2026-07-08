@@ -82,6 +82,8 @@ export class Game {
     this.gauge = 0;
     this.fever = false;
     this._lastBeatK = -1;
+    this._hlActive = false;
+    this._hlPeakFired = new Set(); // 発火済みの高揚区間ピーク
     this._nextIdx = 0;
     this._live = [];
     this._liveStrokes = [];
@@ -124,6 +126,8 @@ export class Game {
       this.stage.clearNotes();
       this.stage.clearStrokes();
       this.stage.setFever(false);
+      this.stage.setHighlight(false);
+      this.stage.setMusicLevel(0);
     }
     if (fireCallback && this.cb.onQuit) this.cb.onQuit();
   }
@@ -167,6 +171,7 @@ export class Game {
     } else {
       this._tickTiming(t, pointers, aspect, W);
     }
+    this._tickFx(t);
 
     this.stage.updatePointers(pointers, dt);
     this.stage.render(dt, this._elapsed);
@@ -304,6 +309,40 @@ export class Game {
     }
 
     this.stage.syncStrokes(this._liveStrokes, t, STROKE_APPEAR);
+  }
+
+  /** 演出: 音楽反応背景と華の刻(高揚区間)・花火 */
+  _tickFx(t) {
+    const m = this.meta;
+    if (!m) return;
+
+    // 背景の呼吸(エネルギータイムライン)
+    if (m.energy && m.energyRate) {
+      const i = Math.floor(t * m.energyRate);
+      this.stage.setMusicLevel(t >= 0 && i >= 0 && i < m.energy.length ? m.energy[i] : 0);
+    }
+
+    // 華の刻: 高揚区間に入ると桜吹雪、ピークで花火
+    if (m.highlights && m.highlights.length) {
+      const region = t >= 0 ? m.highlights.find((h) => t >= h.start && t < h.end) : null;
+      const active = !!region;
+      if (active !== this._hlActive) {
+        this._hlActive = active;
+        this.stage.setHighlight(active);
+      }
+      if (region && !this._hlPeakFired.has(region.peak) && t >= region.peak) {
+        this._hlPeakFired.add(region.peak);
+        this.stage.fireworks(3);
+        this.audio.boom();
+      }
+    }
+
+    // 動的品質: FPS が落ちたら演出負荷と解像度を下げる
+    const fps = this._fps.value;
+    if (fps > 0) {
+      if (fps < 40 && this.stage.quality > 0.5) this.stage.setQuality(0.5);
+      else if (fps > 54 && this.stage.quality < 1) this.stage.setQuality(1);
+    }
   }
 
   _applyStrokeGrade(ls, grade) {

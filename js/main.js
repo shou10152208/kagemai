@@ -42,6 +42,7 @@ const settings = loadSettings();
 
 // ---- E2E/デバッグ用フック ----
 window.__kagemai = { screen: null, errors: [], settings, version: VERSION };
+// stage は後で代入(演出のデバッグ・E2E検証用)
 window.addEventListener('error', (e) => window.__kagemai.errors.push(String(e.message)));
 window.addEventListener('unhandledrejection', (e) => window.__kagemai.errors.push(String(e.reason)));
 
@@ -50,6 +51,7 @@ const audio = new AudioEngine();
 const input = new InputManager();
 const ui = new UI();
 const stage = new Stage(document.getElementById('stage'));
+window.__kagemai.stage = stage;
 const videoEl = document.getElementById('camera-video');
 
 const state = {
@@ -130,10 +132,18 @@ async function loadDemo() {
   try {
     const short = params.get('song') === 'short';
     const demo = await renderDemoSong({ short });
+    // 演出用のエネルギー/高揚区間だけワーカーで解析(BPMは既知)
+    let fx = { energy: null, energyRate: 0, highlights: [] };
+    try {
+      fx = await analyzeInWorker(demo.buffer, () => {}, { energyOnly: true });
+    } catch { /* 演出情報なしでも遊べる */ }
     state.song = {
       type: 'demo',
       ...demo,
       onsets: beatsFromBpm(demo.bpm, demo.offset, demo.duration),
+      energy: fx.energy ? new Float32Array(fx.energy) : null,
+      energyRate: fx.energyRate,
+      highlights: fx.highlights || [],
     };
     ui.hideProgress();
     showSongInfo('生成成功');
@@ -173,6 +183,9 @@ async function loadFile(file) {
       offset: analysis.offset,
       duration: buffer.duration,
       onsets: analysis.quantized,
+      energy: analysis.energy ? new Float32Array(analysis.energy) : null,
+      energyRate: analysis.energyRate,
+      highlights: analysis.highlights || [],
     };
     ui.hideProgress();
     showSongInfo(`デコード成功(${buffer.duration.toFixed(0)}秒 / ${buffer.numberOfChannels}ch)`);
@@ -182,8 +195,8 @@ async function loadFile(file) {
   }
 }
 
-/** 解析は Web Worker で実行(UI をブロックしない) */
-function analyzeInWorker(buffer, onProgress) {
+/** 解析は Web Worker で実行(UI をブロックしない)。energyOnly=true で演出用解析のみ */
+function analyzeInWorker(buffer, onProgress, { energyOnly = false } = {}) {
   return new Promise((resolve, reject) => {
     let worker;
     try {
@@ -206,7 +219,7 @@ function analyzeInWorker(buffer, onProgress) {
     for (let i = 0; i < buffer.numberOfChannels; i++) {
       channels.push(buffer.getChannelData(i).slice().buffer);
     }
-    worker.postMessage({ channels, sampleRate: buffer.sampleRate }, channels);
+    worker.postMessage({ channels, sampleRate: buffer.sampleRate, energyOnly }, channels);
   });
 }
 
@@ -519,9 +532,16 @@ async function beginPlay() {
   document.getElementById('mai-gauge').hidden = !isMai;
   showScreen('play');
   ui.setHud({ score: 0, combo: 0, progress: 0 });
+  const s = state.song;
+  const meta = {
+    bpm: s.bpm,
+    offset: songOffset(),
+    energy: s.energy,
+    energyRate: s.energyRate,
+    highlights: s.highlights,
+  };
   if (isMai) {
     ui.setGauge(0, false);
-    const s = state.song;
     game.start({
       buffer: s.buffer,
       strokes: generateStrokeChart({
@@ -533,13 +553,14 @@ async function beginPlay() {
       }),
       duration: s.duration,
       playMode: 'mai',
-      meta: { bpm: s.bpm, offset: songOffset() },
+      meta,
     });
   } else {
     game.start({
-      buffer: state.song.buffer,
+      buffer: s.buffer,
       chart: currentChart(),
-      duration: state.song.duration,
+      duration: s.duration,
+      meta,
     });
   }
 }

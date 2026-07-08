@@ -112,6 +112,40 @@ export class AudioEngine {
     this.beep(time, { freq: accent ? 1800 : 1200, dur: 0.04, gain: 0.5, type: 'square', out });
   }
 
+  /** 花火の「ドン」(低い太鼓様の音)。time 省略で即時 */
+  boom(time = null, gain = 0.5) {
+    const ctx = this.ensure();
+    const t = Math.max(time ?? ctx.currentTime, ctx.currentTime);
+    const osc = ctx.createOscillator();
+    osc.frequency.setValueAtTime(75, t);
+    osc.frequency.exponentialRampToValueAtTime(38, t + 0.25);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+    osc.connect(g);
+    g.connect(this.master);
+    osc.start(t);
+    osc.stop(t + 0.6);
+    this._noiseBurstAt(t, gain * 0.4);
+  }
+
+  _noiseBurstAt(t, peak) {
+    const ctx = this.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = this._noise();
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = 500;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(peak, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    src.connect(f);
+    f.connect(g);
+    g.connect(this.master);
+    src.start(t);
+    src.stop(t + 0.4);
+  }
+
   // ---- ヒット効果音(Web Audio 合成・追加アセット不要) ----
 
   _noise() {
