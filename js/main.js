@@ -20,6 +20,7 @@ const DEFAULT_SETTINGS = {
   debug: false,
   judgeRadius: 0.09,
   minSwipeSpeed: 1.0,
+  hitSound: 'suzu',
 };
 function loadSettings() {
   try {
@@ -426,10 +427,22 @@ function syncSettingsUi() {
   for (const b of document.querySelectorAll('#settings-mode-seg .seg-btn')) {
     b.classList.toggle('is-active', b.dataset.mode === settings.inputMode);
   }
+  for (const b of document.querySelectorAll('#settings-hitsound-seg .seg-btn')) {
+    b.classList.toggle('is-active', b.dataset.hitsound === settings.hitSound);
+  }
   const slider = document.getElementById('window-slider');
   slider.value = String(settings.judgeWindowMs);
   document.getElementById('window-value').textContent = `±${settings.judgeWindowMs}ms`;
   document.getElementById('debug-toggle').checked = settings.debug;
+}
+
+for (const b of document.querySelectorAll('#settings-hitsound-seg .seg-btn')) {
+  b.addEventListener('click', () => {
+    settings.hitSound = b.dataset.hitsound;
+    saveSettings();
+    syncSettingsUi();
+    audio.hitSound(settings.hitSound, 'perfect'); // 試聴
+  });
 }
 
 for (const b of document.querySelectorAll('#settings-mode-seg .seg-btn')) {

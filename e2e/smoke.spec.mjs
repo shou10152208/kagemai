@@ -74,6 +74,35 @@ test('起動 → デモ曲(短縮版) → マウスモードでプレイ → リ
   expect(errors).toEqual([]);
 });
 
+test('設定: ヒット音の切替(試聴)と判定窓・デバッグ表示の操作', async ({ page }) => {
+  const errors = watchErrors(page);
+
+  await page.goto('/');
+  await page.getByTestId('start').click();
+  await page.getByTestId('mode-mouse').click();
+
+  await page.locator('#btn-settings').click();
+  await expect(page.locator('#settings-modal')).toBeVisible();
+
+  // ヒット音を順に切替(クリックごとに試聴が鳴る)
+  for (const kind of ['suzu', 'hyoshigi', 'tsuzumi', 'none']) {
+    await page.locator(`#settings-hitsound-seg [data-hitsound="${kind}"]`).click();
+    await expect(page.locator(`#settings-hitsound-seg [data-hitsound="${kind}"]`)).toHaveClass(/is-active/);
+  }
+  // 設定が保存されている
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('kagemai-settings')).hitSound);
+  expect(saved).toBe('none');
+
+  await page.locator('#window-slider').fill('200');
+  await expect(page.locator('#window-value')).toHaveText('±200ms');
+  await page.locator('#debug-toggle').check();
+  await expect(page.locator('#debug-overlay')).toBeVisible();
+
+  await page.locator('#btn-settings-close').click();
+  await expect(page.locator('#settings-modal')).toBeHidden();
+  expect(errors).toEqual([]);
+});
+
 test('リトライで再プレイできる(中断→曲選択にも戻れる)', async ({ page }) => {
   const errors = watchErrors(page);
 

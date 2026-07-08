@@ -111,4 +111,90 @@ export class AudioEngine {
   click(time, accent = false, out = null) {
     this.beep(time, { freq: accent ? 1800 : 1200, dur: 0.04, gain: 0.5, type: 'square', out });
   }
+
+  // ---- ヒット効果音(Web Audio 合成・追加アセット不要) ----
+
+  _noise() {
+    if (!this._noiseBuf) {
+      const ctx = this.ensure();
+      const n = Math.floor(ctx.sampleRate * 0.5);
+      this._noiseBuf = ctx.createBuffer(1, n, ctx.sampleRate);
+      const data = this._noiseBuf.getChannelData(0);
+      for (let i = 0; i < n; i++) data[i] = Math.random() * 2 - 1;
+    }
+    return this._noiseBuf;
+  }
+
+  _envGain(t, peak, decay) {
+    const ctx = this.ctx;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(peak, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + decay);
+    g.connect(this.master);
+    return g;
+  }
+
+  _noiseBurst(t, { filterType, freq, q = 1, peak, decay }) {
+    const ctx = this.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = this._noise();
+    const f = ctx.createBiquadFilter();
+    f.type = filterType;
+    f.frequency.value = freq;
+    f.Q.value = q;
+    src.connect(f);
+    f.connect(this._envGain(t, peak, decay));
+    src.start(t);
+    src.stop(t + decay + 0.05);
+  }
+
+  /**
+   * 判定時のヒット効果音を即時再生する。
+   * type: 'none' | 'suzu'(鈴) | 'hyoshigi'(拍子木) | 'tsuzumi'(鼓)
+   * judge が 'good' のときは控えめに、'miss' は鳴らさない。
+   */
+  hitSound(type, judge = 'perfect') {
+    if (!type || type === 'none' || judge === 'miss') return;
+    const ctx = this.ensure();
+    const t = ctx.currentTime;
+    const vol = judge === 'perfect' ? 1 : 0.55;
+    const jitter = () => 1 + (Math.random() - 0.5) * 0.06; // 連打の機械っぽさを消す
+    if (type === 'suzu') {
+      // 鈴: 非整数倍音のきらめき+高域ノイズの「シャン」
+      for (const [freq, g] of [[2731, 0.10], [4053, 0.09], [5197, 0.07], [6423, 0.05]]) {
+        const osc = ctx.createOscillator();
+        osc.frequency.value = freq * jitter();
+        osc.connect(this._envGain(t, g * vol, 0.32));
+        osc.start(t);
+        osc.stop(t + 0.4);
+      }
+      this._noiseBurst(t, { filterType: 'highpass', freq: 6000, peak: 0.16 * vol, decay: 0.09 });
+    } else if (type === 'hyoshigi') {
+      // 拍子木: 短い木質の「カッ」
+      this._noiseBurst(t, { filterType: 'bandpass', freq: 2200 * jitter(), q: 6, peak: 0.55 * vol, decay: 0.055 });
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = 1150 * jitter();
+      osc.connect(this._envGain(t, 0.2 * vol, 0.04));
+      osc.start(t);
+      osc.stop(t + 0.1);
+    } else if (type === 'tsuzumi') {
+      // 鼓: 音程が落ちる「ポン」
+      const osc = ctx.createOscillator();
+      osc.frequency.setValueAtTime(250 * jitter(), t);
+      osc.frequency.exponentialRampToValueAtTime(150, t + 0.12);
+      osc.connect(this._envGain(t, 0.5 * vol, 0.2));
+      osc.start(t);
+      osc.stop(t + 0.3);
+      this._noiseBurst(t, { filterType: 'lowpass', freq: 900, peak: 0.14 * vol, decay: 0.04 });
+    }
+  }
 }
+
+/** 設定画面で使うヒット音の種類とラベル */
+export const HIT_SOUNDS = Object.freeze({
+  none: 'なし',
+  suzu: '鈴',
+  hyoshigi: '拍子木',
+  tsuzumi: '鼓',
+});
