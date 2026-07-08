@@ -62,10 +62,24 @@ export class Stage {
     this.laneGroup = new THREE.Group();
     this.scene.add(this.bgGroup, this.laneGroup, this.noteGroup, this.fxGroup, this.brushGroup);
 
-    this.noteViews = new Map(); // note.id -> group
-    this.fx = [];               // {update(dt,t)->bool}
+    this.noteViews = new Map();   // note.id -> group
+    this.strokeViews = new Map(); // stroke.id -> view(舞モード)
+    this.fx = [];                 // {update(dt,t)->bool}
     this.trails = { L: [], R: [] };
     this.heads = {};
+    this._pulse = 0;
+    this.feverOn = false;
+
+    // フィーバー/拍パルス用の金色オーバーレイ(カメラモードでも使う)
+    this.feverOverlay = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({
+        color: KIN, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }),
+    );
+    this.feverOverlay.position.z = 3;
+    this.scene.add(this.feverOverlay);
 
     this._buildBackground();
     this._buildBrushes();
@@ -106,6 +120,10 @@ export class Stage {
     this.setJudgeRadius(this._judgeNormR || 0.09);
     this._layoutBackground();
     this._layoutLanes();
+    if (this.feverOverlay) {
+      const { w: fw, h: fh } = this.planeSize(3);
+      this.feverOverlay.scale.set(fw * 1.1, fh * 1.1, 1);
+    }
   }
 
   setCameraMode(on) {
@@ -351,6 +369,91 @@ export class Stage {
     this.noteViews.delete(id);
   }
 
+  // ---- 舞モード: ストローク(なぞりノーツ)描画 ----
+  _createStrokeView(stroke, samples) {
+    const g = new THREE.Group();
+    const color = HAND_COLORS[stroke.hand];
+    const dabs = [];
+    for (const s of samples) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: this.dab, color, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+      sp.position.copy(this.worldFromNorm(s.x, s.y, 0));
+      sp.scale.setScalar(this._noteR * 0.9);
+      dabs.push(sp);
+      g.add(sp);
+    }
+    // 進行ヘッド(いまなぞるべき位置を示す金の光)
+    const head = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: this.dab, color: KIN, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    head.scale.setScalar(this._noteR * 2.0);
+    g.add(head);
+    this.noteGroup.add(g);
+    const view = { group: g, dabs, head };
+    this.strokeViews.set(stroke.id, view);
+    return view;
+  }
+
+  /**
+   * ライブストロークを同期する。
+   * liveStrokes: [{stroke:{id,tStart,tEnd}, samples, covered:Uint8Array}]
+   */
+  syncStrokes(liveStrokes, t, appearLead) {
+    const alive = new Set();
+    for (const ls of liveStrokes) {
+      alive.add(ls.stroke.id);
+      const view = this.strokeViews.get(ls.stroke.id) || this._createStrokeView(ls.stroke, ls.samples);
+      const { tStart, tEnd } = ls.stroke;
+      const fadeIn = Math.max(0, Math.min(1, (t - (tStart - appearLead)) / 0.4));
+      const active = t >= tStart - 0.15;
+      for (let i = 0; i < view.dabs.length; i++) {
+        const d = view.dabs[i];
+        if (ls.covered[i]) {
+          d.material.color.setHex(KIN);
+          d.material.opacity = 0.95;
+          d.scale.setScalar(this._noteR * 1.35);
+        } else {
+          d.material.opacity = fadeIn * (active ? 0.6 : 0.28);
+        }
+      }
+      if (t >= tStart - 0.05 && t <= tEnd + 0.1) {
+        const u = Math.max(0, Math.min(1, (t - tStart) / (tEnd - tStart)));
+        const idx = Math.min(ls.samples.length - 1, Math.round(u * (ls.samples.length - 1)));
+        const s = ls.samples[idx];
+        view.head.position.copy(this.worldFromNorm(s.x, s.y, 0.1));
+        view.head.material.opacity = 0.85;
+      } else {
+        view.head.material.opacity = 0;
+      }
+    }
+    for (const [id, view] of this.strokeViews) {
+      if (!alive.has(id)) this._disposeStrokeView(id, view);
+    }
+  }
+
+  _disposeStrokeView(id, view) {
+    this.noteGroup.remove(view.group);
+    view.group.traverse((o) => { if (o.material) o.material.dispose(); });
+    this.strokeViews.delete(id);
+  }
+
+  clearStrokes() {
+    for (const [id, view] of [...this.strokeViews]) this._disposeStrokeView(id, view);
+  }
+
+  /** フィーバー(舞ゲージ満タン)の映像効果の切替 */
+  setFever(on) {
+    this.feverOn = on;
+  }
+
+  /** 拍に合わせた画面の微かな明滅(舞モード) */
+  beatPulse() {
+    this._pulse = 1;
+  }
+
   // ---- ヒットエフェクト ----
   hitFx(nx, ny, judge) {
     const colors = { perfect: KIN, good: 0x8fa8cc, miss: 0x4a443c };
@@ -427,6 +530,10 @@ export class Stage {
       }
       pos.needsUpdate = true;
     }
+    // フィーバー/拍パルスのオーバーレイ
+    this._pulse = Math.max(0, this._pulse - dt * 4);
+    const feverGlow = this.feverOn ? 0.09 + 0.04 * Math.sin(elapsed * 6) : 0;
+    this.feverOverlay.material.opacity = feverGlow + this._pulse * 0.06;
     // エフェクト更新
     this.fx = this.fx.filter((fn) => fn(dt));
     this.renderer.render(this.scene, this.camera);

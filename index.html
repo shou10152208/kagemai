@@ -120,17 +120,22 @@
     </div>
   </section>
 
-  <!-- 難易度選択 -->
+  <!-- 遊び方選択 -->
   <section id="screen-difficulty" class="screen" hidden>
-    <h2 class="screen-heading">難易度をえらぶ</h2>
+    <h2 class="screen-heading">遊び方をえらぶ</h2>
     <div class="mode-list">
-      <button class="btn mode-btn" data-difficulty="normal" data-testid="difficulty-normal">
-        <span class="mode-name">通常 — 舞</span>
-        <span class="mode-desc">ノーツに触れるだけで良い</span>
+      <button class="btn mode-btn" data-playmode="mai" data-testid="playmode-mai">
+        <span class="mode-name">舞 — なぞる</span>
+        <span class="mode-desc">流れる光の筆致を手でなぞる。タイミングを競わない、動きで舞う遊び方</span>
+        <span class="mode-badge">おすすめ</span>
       </button>
-      <button class="btn mode-btn" data-difficulty="hard" data-testid="difficulty-hard">
-        <span class="mode-name">高難度 — 乱舞</span>
-        <span class="mode-desc">矢印ノーツは指定方向へ素早く払う</span>
+      <button class="btn mode-btn" data-playmode="ritsu" data-testid="difficulty-normal">
+        <span class="mode-name">律 — タイミング</span>
+        <span class="mode-desc">ノーツが環に重なる瞬間に触れる(要タイミング校正)</span>
+      </button>
+      <button class="btn mode-btn" data-playmode="ranbu" data-testid="difficulty-hard">
+        <span class="mode-name">乱舞 — 高難度</span>
+        <span class="mode-desc">律に加えて、矢印ノーツは指定方向へ素早く払う</span>
       </button>
     </div>
   </section>
@@ -156,6 +161,7 @@
     <div id="lane-labels" class="lane-labels" hidden>
       <span>D</span><span>F</span><span>J</span><span>K</span>
     </div>
+    <div id="mai-gauge" class="mai-gauge" hidden><div id="mai-gauge-fill"></div></div>
     <button id="btn-quit" class="btn btn-ghost btn-quit">中断</button>
   </section>
 
@@ -170,6 +176,7 @@
         <div><dt>良 GOOD</dt><dd id="result-good">0</dd></div>
         <div><dt>逸 MISS</dt><dd id="result-miss">0</dd></div>
         <div><dt>最大コンボ</dt><dd id="result-maxcombo">0</dd></div>
+        <div id="result-beat-row" hidden><dt>拍合</dt><dd id="result-beat">0</dd></div>
       </dl>
     </div>
     <div class="song-info-actions">

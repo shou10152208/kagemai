@@ -9,6 +9,7 @@ import { UI } from './ui.js';
 import { Game } from './game.js';
 import { renderDemoSong } from './demo-song.js';
 import { generateChart, beatsFromBpm } from './core/chart.js';
+import { generateStrokeChart } from './core/stroke.js';
 import { VERSION } from './version.js';
 
 const params = new URLSearchParams(location.search);
@@ -52,7 +53,8 @@ const stage = new Stage(document.getElementById('stage'));
 const videoEl = document.getElementById('camera-video');
 
 const state = {
-  song: null,        // {type, name, buffer, bpm, offset, duration, onsets}
+  song: null,        // {type, name, buffer, bpm, offset, duration, onsets, nudgeMs}
+  playMode: 'mai',   // 'mai'(なぞり) | 'timing'(律/乱舞)
   difficulty: 'normal',
   recommended: 'mouse',
 };
@@ -69,7 +71,11 @@ const game = new Game({
   audio, input, stage, settings,
   callbacks: {
     onJudge: (judge, note) => ui.popJudge(judge, note.x, note.y),
-    onHud: (hud) => ui.setHud(hud),
+    onBeatHit: (pointer) => ui.popJudge('beat', pointer.x, pointer.y - 0.06),
+    onHud: (hud) => {
+      ui.setHud(hud);
+      if (hud.gauge !== undefined) ui.setGauge(hud.gauge, hud.fever);
+    },
     onCountdown: (n) => ui.countdown(n),
     onFinish: (results) => showResult(results),
     onQuit: () => {},
@@ -410,7 +416,13 @@ ui.bind('btn-calib-back', () => stopCalibration());
 // ---- 難易度選択 ----
 for (const btn of document.querySelectorAll('#screen-difficulty .mode-btn')) {
   btn.addEventListener('click', () => {
-    state.difficulty = btn.dataset.difficulty;
+    const pm = btn.dataset.playmode;
+    if (pm === 'mai') {
+      state.playMode = 'mai';
+    } else {
+      state.playMode = 'timing';
+      state.difficulty = pm === 'ranbu' ? 'hard' : 'normal';
+    }
     if (settings.inputMode === 'camera') startGuide();
     else beginPlay();
   });
@@ -499,17 +511,37 @@ async function beginPlay() {
     return;
   }
   const isCamera = mode === 'camera';
+  const isMai = state.playMode === 'mai';
   videoEl.hidden = !isCamera;
   stage.setCameraMode(isCamera);
-  stage.setLaneGuides(mode === 'mouse');
-  document.getElementById('lane-labels').hidden = mode !== 'mouse';
+  stage.setLaneGuides(!isMai && mode === 'mouse');
+  document.getElementById('lane-labels').hidden = isMai || mode !== 'mouse';
+  document.getElementById('mai-gauge').hidden = !isMai;
   showScreen('play');
   ui.setHud({ score: 0, combo: 0, progress: 0 });
-  game.start({
-    buffer: state.song.buffer,
-    chart: currentChart(),
-    duration: state.song.duration,
-  });
+  if (isMai) {
+    ui.setGauge(0, false);
+    const s = state.song;
+    game.start({
+      buffer: s.buffer,
+      strokes: generateStrokeChart({
+        duration: s.duration,
+        bpm: s.bpm,
+        offset: songOffset(),
+        density: settings.density,
+        seed: hashStr(s.name),
+      }),
+      duration: s.duration,
+      playMode: 'mai',
+      meta: { bpm: s.bpm, offset: songOffset() },
+    });
+  } else {
+    game.start({
+      buffer: state.song.buffer,
+      chart: currentChart(),
+      duration: state.song.duration,
+    });
+  }
 }
 
 ui.bind('btn-quit', () => {
@@ -527,6 +559,9 @@ function showResult(results) {
   document.getElementById('result-good').textContent = String(results.counts.good);
   document.getElementById('result-miss').textContent = String(results.counts.miss);
   document.getElementById('result-maxcombo').textContent = String(results.maxCombo);
+  const beatRow = document.getElementById('result-beat-row');
+  beatRow.hidden = results.playMode !== 'mai';
+  document.getElementById('result-beat').textContent = String(results.beatHits ?? 0);
   window.__kagemai.lastResult = results;
   showScreen('result');
 }
