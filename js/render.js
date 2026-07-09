@@ -242,13 +242,31 @@ export class Stage {
   }
 
   // ---- 光の筆(ポインタ追従) ----
+  // 自分の手は「白熱コア+色付きグロー+細リング」の彗星スタイルにして、
+  // お手本(淡い墨点のガイド)と見分けられる画面で一番明るい存在にする
   _buildBrushes() {
     for (const hand of ['L', 'R']) {
-      const head = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: this.dab, color: HAND_COLORS[hand], transparent: true, opacity: 0.95,
+      const head = new THREE.Group();
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: this.dab, color: HAND_COLORS[hand], transparent: true, opacity: 0.9,
         blending: THREE.AdditiveBlending, depthWrite: false,
       }));
+      glow.scale.setScalar(2.6);
+      const core = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: this.dab, color: 0xffffff, transparent: true, opacity: 0.95,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+      core.scale.setScalar(1.0);
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(1.35, 1.5, 40),
+        new THREE.MeshBasicMaterial({
+          color: HAND_COLORS[hand], transparent: true, opacity: 0.9,
+          side: THREE.DoubleSide, depthWrite: false,
+        }),
+      );
+      head.add(glow, core, ring);
       head.visible = false;
+      head.userData = { glow, core, ring };
       this.heads[hand] = head;
       this.brushGroup.add(head);
       const pool = [];
@@ -273,8 +291,11 @@ export class Stage {
       const head = this.heads[hand];
       const pos = this.worldFromNorm(p.x, p.y, 0.4);
       head.position.copy(pos);
-      head.scale.setScalar(r * (p.active ? 2.4 : 1.6));
-      head.material.opacity = p.active ? 0.95 : 0.5;
+      head.scale.setScalar(r * (p.active ? 0.75 : 0.55));
+      const { glow, core, ring } = head.userData;
+      glow.material.opacity = p.active ? 0.9 : 0.45;
+      core.material.opacity = p.active ? 0.95 : 0.5;
+      ring.material.opacity = p.active ? 0.9 : 0.45;
       head.visible = true;
       seen[hand] = true;
       // 軌跡を落とす
@@ -558,15 +579,17 @@ export class Stage {
   // ---- 舞モード: ストローク(なぞりノーツ)描画 ----
   _createStrokeView(stroke, samples) {
     const g = new THREE.Group();
-    const color = HAND_COLORS[stroke.hand];
+    // お手本は淡い低彩度の墨点(非加算)。自分の手(白熱の彗星)と混同しないよう
+    // 意図的に地味にし、なぞれた部分だけ金の加算発光に変わる
+    const guideColor = new THREE.Color(HAND_COLORS[stroke.hand]).lerp(new THREE.Color(0xcfc6b2), 0.5);
     const dabs = [];
     for (const s of samples) {
       const sp = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: this.dab, color, transparent: true, opacity: 0,
-        blending: THREE.AdditiveBlending, depthWrite: false,
+        map: this.dab, color: guideColor, transparent: true, opacity: 0,
+        blending: THREE.NormalBlending, depthWrite: false,
       }));
       sp.position.copy(this.worldFromNorm(s.x, s.y, 0));
-      sp.scale.setScalar(this._noteR * 0.9);
+      sp.scale.setScalar(this._noteR * 0.62);
       dabs.push(sp);
       g.add(sp);
     }
@@ -598,11 +621,16 @@ export class Stage {
       for (let i = 0; i < view.dabs.length; i++) {
         const d = view.dabs[i];
         if (ls.covered[i]) {
-          d.material.color.setHex(KIN);
+          if (d.material.blending !== THREE.AdditiveBlending) {
+            // なぞれた墨点は金の光に変わる
+            d.material.color.setHex(KIN);
+            d.material.blending = THREE.AdditiveBlending;
+            d.material.needsUpdate = true;
+          }
           d.material.opacity = 0.95;
           d.scale.setScalar(this._noteR * 1.35);
         } else {
-          d.material.opacity = fadeIn * (active ? 0.6 : 0.28);
+          d.material.opacity = fadeIn * (active ? 0.5 : 0.25);
         }
       }
       if (t >= tStart - 0.05 && t <= tEnd + 0.1) {
