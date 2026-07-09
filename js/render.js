@@ -31,6 +31,24 @@ export const THEMES = {
   washi:  { label: '和紙', stops: ['#f4eddd', '#ece2cb', '#dccfae'], dust: 0xb08d3e, blobColor: 0xd8c8a0, blobOpacity: 0.3, petal: 0xe8a8b8 },
 };
 
+/** 矢羽メッシュ(+x向き。単位サイズで作り呼び出し側でスケール) */
+function makeArrowMesh(color) {
+  const shape = new THREE.Shape();
+  shape.moveTo(0.15, -0.55);
+  shape.lineTo(0.8, 0);
+  shape.lineTo(0.15, 0.55);
+  shape.lineTo(0.38, 0);
+  shape.closePath();
+  const geo = new THREE.ShapeGeometry(shape);
+  geo.translate(-0.475, 0, 0); // 回転が図形の中心まわりになるよう原点へ寄せる
+  return new THREE.Mesh(
+    geo,
+    new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false,
+    }),
+  );
+}
+
 /** 花びらテクスチャ(白で描いて material.color で染める) */
 function makePetalTexture(size = 64) {
   const c = document.createElement('canvas');
@@ -87,6 +105,7 @@ export class Stage {
 
     this.noteViews = new Map();   // note.id -> group
     this.strokeViews = new Map(); // stroke.id -> view(舞モード)
+    this.flagViews = new Map();   // cmd.id -> view(旗印モード)
     this.fx = [];                 // {update(dt,t)->bool}
     this.trails = { L: [], R: [] };
     this.heads = {};
@@ -242,13 +261,31 @@ export class Stage {
   }
 
   // ---- 光の筆(ポインタ追従) ----
+  // 自分の手は「白熱コア+色付きグロー+細リング」の彗星スタイルにして、
+  // お手本(淡い墨点のガイド)と見分けられる画面で一番明るい存在にする
   _buildBrushes() {
     for (const hand of ['L', 'R']) {
-      const head = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: this.dab, color: HAND_COLORS[hand], transparent: true, opacity: 0.95,
+      const head = new THREE.Group();
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: this.dab, color: HAND_COLORS[hand], transparent: true, opacity: 0.9,
         blending: THREE.AdditiveBlending, depthWrite: false,
       }));
+      glow.scale.setScalar(2.6);
+      const core = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: this.dab, color: 0xffffff, transparent: true, opacity: 0.95,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+      core.scale.setScalar(1.0);
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(1.35, 1.5, 40),
+        new THREE.MeshBasicMaterial({
+          color: HAND_COLORS[hand], transparent: true, opacity: 0.9,
+          side: THREE.DoubleSide, depthWrite: false,
+        }),
+      );
+      head.add(glow, core, ring);
       head.visible = false;
+      head.userData = { glow, core, ring };
       this.heads[hand] = head;
       this.brushGroup.add(head);
       const pool = [];
@@ -273,8 +310,11 @@ export class Stage {
       const head = this.heads[hand];
       const pos = this.worldFromNorm(p.x, p.y, 0.4);
       head.position.copy(pos);
-      head.scale.setScalar(r * (p.active ? 2.4 : 1.6));
-      head.material.opacity = p.active ? 0.95 : 0.5;
+      head.scale.setScalar(r * (p.active ? 0.75 : 0.55));
+      const { glow, core, ring } = head.userData;
+      glow.material.opacity = p.active ? 0.9 : 0.45;
+      core.material.opacity = p.active ? 0.95 : 0.5;
+      ring.material.opacity = p.active ? 0.9 : 0.45;
       head.visible = true;
       seen[hand] = true;
       // 軌跡を落とす
@@ -323,16 +363,8 @@ export class Stage {
 
     if (note.type === 'swipe') {
       // 払う方向を示す矢羽
-      const shape = new THREE.Shape();
-      shape.moveTo(0.15, -0.55);
-      shape.lineTo(0.8, 0);
-      shape.lineTo(0.15, 0.55);
-      shape.lineTo(0.38, 0);
-      shape.closePath();
-      const arrow = new THREE.Mesh(
-        new THREE.ShapeGeometry(shape),
-        new THREE.MeshBasicMaterial({ color: KIN, transparent: true, opacity: 0.95, side: THREE.DoubleSide, depthWrite: false }),
-      );
+      const arrow = makeArrowMesh(KIN);
+      arrow.material.opacity = 0.95;
       arrow.scale.setScalar(r * 0.9);
       arrow.rotation.z = Math.atan2(-note.dir.y, note.dir.x);
       arrow.position.z = 0.02;
@@ -558,15 +590,17 @@ export class Stage {
   // ---- 舞モード: ストローク(なぞりノーツ)描画 ----
   _createStrokeView(stroke, samples) {
     const g = new THREE.Group();
-    const color = HAND_COLORS[stroke.hand];
+    // お手本は淡い低彩度の墨点(非加算)。自分の手(白熱の彗星)と混同しないよう
+    // 意図的に地味にし、なぞれた部分だけ金の加算発光に変わる
+    const guideColor = new THREE.Color(HAND_COLORS[stroke.hand]).lerp(new THREE.Color(0xcfc6b2), 0.5);
     const dabs = [];
     for (const s of samples) {
       const sp = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: this.dab, color, transparent: true, opacity: 0,
-        blending: THREE.AdditiveBlending, depthWrite: false,
+        map: this.dab, color: guideColor, transparent: true, opacity: 0,
+        blending: THREE.NormalBlending, depthWrite: false,
       }));
       sp.position.copy(this.worldFromNorm(s.x, s.y, 0));
-      sp.scale.setScalar(this._noteR * 0.9);
+      sp.scale.setScalar(this._noteR * 0.62);
       dabs.push(sp);
       g.add(sp);
     }
@@ -598,11 +632,16 @@ export class Stage {
       for (let i = 0; i < view.dabs.length; i++) {
         const d = view.dabs[i];
         if (ls.covered[i]) {
-          d.material.color.setHex(KIN);
+          if (d.material.blending !== THREE.AdditiveBlending) {
+            // なぞれた墨点は金の光に変わる
+            d.material.color.setHex(KIN);
+            d.material.blending = THREE.AdditiveBlending;
+            d.material.needsUpdate = true;
+          }
           d.material.opacity = 0.95;
           d.scale.setScalar(this._noteR * 1.35);
         } else {
-          d.material.opacity = fadeIn * (active ? 0.6 : 0.28);
+          d.material.opacity = fadeIn * (active ? 0.5 : 0.25);
         }
       }
       if (t >= tStart - 0.05 && t <= tEnd + 0.1) {
@@ -628,6 +667,82 @@ export class Stage {
 
   clearStrokes() {
     for (const [id, view] of [...this.strokeViews]) this._disposeStrokeView(id, view);
+  }
+
+  // ---- 旗印モード: 矢印出題の表示 ----
+  _createFlagView(cmd) {
+    const g = new THREE.Group();
+    const color = cmd.hand === 'B' ? KIN : HAND_COLORS[cmd.hand];
+    const dir = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } }[cmd.dir];
+    const rot = Math.atan2(-dir.y, dir.x);
+    const xs = cmd.hand === 'B' ? [0.28, 0.72] : [cmd.hand === 'L' ? 0.28 : 0.72];
+    const arrows = [];
+    const rings = [];
+    for (const nx of xs) {
+      const pos = this.worldFromNorm(nx, 0.42, 0.2);
+      const arrow = makeArrowMesh(color);
+      arrow.position.copy(pos);
+      arrow.rotation.z = rot;
+      g.add(arrow);
+      arrows.push(arrow);
+      // 「今!」を示す収縮リング
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(1.5, 1.62, 48),
+        new THREE.MeshBasicMaterial({
+          color: KIN, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false,
+        }),
+      );
+      ring.position.copy(pos);
+      g.add(ring);
+      rings.push(ring);
+    }
+    this.noteGroup.add(g);
+    const view = { group: g, arrows, rings };
+    this.flagViews.set(cmd.id, view);
+    return view;
+  }
+
+  /** ライブ出題を同期する。liveFlags: [{cmd:{id,time,hand,dir}}] */
+  syncFlags(liveFlags, t, appearLead) {
+    const alive = new Set();
+    for (const lf of liveFlags) {
+      alive.add(lf.cmd.id);
+      const view = this.flagViews.get(lf.cmd.id) || this._createFlagView(lf.cmd);
+      const k = Math.max(0, Math.min(1, (t - (lf.cmd.time - appearLead)) / appearLead));
+      const remain = lf.cmd.time - t;
+      // 予告: 小さく淡く → ビートに向けて拡大・明瞭化。直前は脈打つ
+      const pulse = Math.abs(remain) < 0.12 ? 1.15 : 1;
+      const scale = this._noteR * (0.9 + 0.5 * k) * pulse;
+      for (const a of view.arrows) {
+        a.scale.setScalar(scale);
+        a.material.opacity = 0.25 + 0.7 * k;
+      }
+      for (const ring of view.rings) {
+        if (remain < 0.7 && remain > -0.45) {
+          const rk = 1 - Math.max(0, remain / 0.7);
+          ring.material.opacity = 0.75 * rk;
+          ring.scale.setScalar(this._noteR * (1.7 - 0.75 * rk));
+        } else {
+          ring.material.opacity = 0;
+        }
+      }
+    }
+    for (const [id, view] of this.flagViews) {
+      if (!alive.has(id)) this._disposeFlagView(id, view);
+    }
+  }
+
+  _disposeFlagView(id, view) {
+    this.noteGroup.remove(view.group);
+    view.group.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+    this.flagViews.delete(id);
+  }
+
+  clearFlags() {
+    for (const [id, view] of [...this.flagViews]) this._disposeFlagView(id, view);
   }
 
   /** フィーバー(舞ゲージ満タン)の映像効果の切替 */

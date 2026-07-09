@@ -4,10 +4,11 @@
 // (setTimeout / フレーム数によるタイミング管理は行わない)。
 
 import {
-  JUDGE, judgeNoteHit, judgeTiming, isNoteExpired, isPointerOnNote,
+  JUDGE, judgeNoteHit, judgeTiming, isNoteExpired, isPointerOnNote, checkSwipe,
   scoreForJudge, maxPossibleScore, rankForRatio,
 } from './core/judge.js';
 import { sampleStroke, strokeGrade, beatIndex } from './core/stroke.js';
+import { FLAG_DIRS, FLAG_WINDOWS } from './core/flag.js';
 import { LANE_COUNT } from './input.js';
 
 const LEAD_TIME = 1.8;       // ノーツ出現から判定プレーン到達までの秒数
@@ -19,6 +20,10 @@ const STROKE_APPEAR = 1.2;    // ストロークが薄く現れてから始ま�
 const STROKE_SLACK = 0.35;    // 終了後になぞりを受け付ける猶予
 const STROKE_SAMPLES = 20;    // 経路のサンプル数(カバー率の分母)
 const BEAT_HIT_SPEED = 1.1;   // 拍合ボーナスに必要なポインタ速度
+
+// 旗印モード(旗上げ式)
+const FLAG_APPEAR = 1.6;      // 矢印の予告時間
+const FLAG_SPEED = 1.0;       // 「振った」と認める速度(高さ/秒)
 
 export class Game {
   /**
@@ -56,16 +61,23 @@ export class Game {
   }
 
   /**
-   * playMode: 'timing'(律/乱舞: 従来のタイミング判定)| 'mai'(舞: なぞり)
-   * timing では chart(ノーツ配列)、mai では strokes(ストローク配列)と
-   * meta {bpm, offset}(拍パルス・拍合用)を渡す。
+   * playMode: 'timing'(律/乱舞)| 'mai'(舞: なぞり)| 'hata'(旗印: 旗上げ式)
+   * timing は chart、mai は strokes、hata は flags を渡す。
+   * meta {bpm, offset, energy, energyRate, highlights} は演出用。
+   * handStrict: 出題の手(L/R)とポインタの手の一致を要求するか(マウスは false)
    */
-  start({ buffer, chart = [], strokes = [], duration, playMode = 'timing', meta = null }) {
+  start({
+    buffer, chart = [], strokes = [], flags = [],
+    duration, playMode = 'timing', meta = null, handStrict = true,
+  }) {
     this.stop(false);
     const ctx = this.audio.ensure();
 
     this.playMode = playMode;
     this.meta = meta;
+    this.handStrict = handStrict;
+    this.flags = flags.map((f) => ({ cmd: f, judged: null, matched: { L: false, R: false } }));
+    this._liveFlags = [];
     this.chart = chart.map((n) => ({ ...n, judged: null }));
     this.strokes = strokes.map((s) => ({
       stroke: s,
@@ -125,6 +137,7 @@ export class Game {
     if (this.stage) {
       this.stage.clearNotes();
       this.stage.clearStrokes();
+      this.stage.clearFlags();
       this.stage.setFever(false);
       this.stage.setHighlight(false);
       this.stage.setMusicLevel(0);
@@ -168,6 +181,8 @@ export class Game {
 
     if (this.playMode === 'mai') {
       this._tickMai(t, dt, pointers, aspect);
+    } else if (this.playMode === 'hata') {
+      this._tickHata(t, dt, pointers);
     } else {
       this._tickTiming(t, pointers, aspect, W);
     }
@@ -182,7 +197,7 @@ export class Game {
       combo: this.combo,
       progress: Math.max(0, Math.min(1, t / this.duration)),
     };
-    if (this.playMode === 'mai') {
+    if (this.playMode === 'mai' || this.playMode === 'hata') {
       hud.gauge = this.gauge;
       hud.fever = this.fever;
     }
@@ -292,7 +307,12 @@ export class Game {
       }
     }
 
-    // 舞ゲージ: 満タンでフィーバー、フィーバー中は消費
+    this._updateGauge(dt);
+    this.stage.syncStrokes(this._liveStrokes, t, STROKE_APPEAR);
+  }
+
+  /** 舞ゲージ: 満タンでフィーバー、フィーバー中は消費(舞・旗印で共用) */
+  _updateGauge(dt) {
     if (this.fever) {
       this.gauge -= dt / 8;
       if (this.gauge <= 0) {
@@ -307,8 +327,69 @@ export class Game {
         this.stage.setFever(true);
       }
     }
+  }
 
-    this.stage.syncStrokes(this._liveStrokes, t, STROKE_APPEAR);
+  /** 旗印: 出題の方向へ手を振れたか(方向±60°・寛容窓・両手同時対応) */
+  _tickHata(t, dt, pointers) {
+    while (this._nextIdx < this.flags.length &&
+           this.flags[this._nextIdx].cmd.time - FLAG_APPEAR <= t) {
+      this._liveFlags.push(this.flags[this._nextIdx++]);
+    }
+
+    const judgeTime = t - this.inputLatency;
+    for (const lf of this._liveFlags) {
+      if (lf.judged) continue;
+      const { cmd } = lf;
+      const dt2 = judgeTime - cmd.time;
+      if (dt2 > FLAG_WINDOWS.good) {
+        this._applyFlagGrade(lf, JUDGE.MISS);
+        continue;
+      }
+      if (dt2 < -FLAG_WINDOWS.good) continue; // まだ窓の外
+      const dir = FLAG_DIRS[cmd.dir];
+      const needBoth = cmd.hand === 'B' && this.handStrict;
+      for (const p of pointers) {
+        if (!p.active) continue;
+        if (this.handStrict && cmd.hand !== 'B' && p.hand !== cmd.hand) continue;
+        if (checkSwipe(p.vx, p.vy, dir, FLAG_SPEED)) {
+          if (needBoth) lf.matched[p.hand] = true;
+          else { lf.matched.L = true; lf.matched.R = true; }
+        }
+      }
+      const done = needBoth ? (lf.matched.L && lf.matched.R) : (lf.matched.L || lf.matched.R);
+      if (done) {
+        this._applyFlagGrade(lf, judgeTiming(dt2, FLAG_WINDOWS) ?? JUDGE.GOOD);
+      }
+    }
+    this._liveFlags = this._liveFlags.filter((lf) => !lf.judged);
+
+    this._updateGauge(dt);
+    this.stage.syncFlags(this._liveFlags, t, FLAG_APPEAR);
+  }
+
+  _flagPos(cmd) {
+    const x = cmd.hand === 'L' ? 0.28 : cmd.hand === 'R' ? 0.72 : 0.5;
+    return { x, y: 0.42 };
+  }
+
+  _applyFlagGrade(lf, grade) {
+    lf.judged = grade;
+    const mult = this.fever ? 1.5 : 1;
+    if (grade === JUDGE.MISS) {
+      this.combo = 0;
+      this.counts.miss++;
+      this.gauge = Math.max(0, this.gauge - 0.1);
+    } else {
+      this.score += Math.round(2 * scoreForJudge(grade, this.combo) * mult);
+      this.combo++;
+      this.maxCombo = Math.max(this.maxCombo, this.combo);
+      this.counts[grade]++;
+      this.gauge = Math.min(1, this.gauge + (grade === JUDGE.PERFECT ? 0.13 : 0.07));
+    }
+    const pos = this._flagPos(lf.cmd);
+    this.audio.hitSound(this.settings.hitSound, grade, (this.settings.hitVolume ?? 80) / 100);
+    this.stage.hitFx(pos.x, pos.y, grade);
+    this.cb.onJudge(grade, pos);
   }
 
   /** 演出: 音楽反応背景と華の刻(高揚区間)・花火 */
@@ -398,9 +479,10 @@ export class Game {
   }
 
   _finish() {
-    const isMai = this.playMode === 'mai';
-    const total = isMai ? this.strokes.length : this.chart.length;
-    const max = (isMai ? 3 : 1) * maxPossibleScore(total);
+    const totals = { mai: this.strokes.length, hata: this.flags.length, timing: this.chart.length };
+    const factors = { mai: 3, hata: 2, timing: 1 };
+    const total = totals[this.playMode] ?? this.chart.length;
+    const max = (factors[this.playMode] ?? 1) * maxPossibleScore(total);
     const ratio = max > 0 ? Math.min(1, this.score / max) : 0;
     const results = {
       score: this.score,
