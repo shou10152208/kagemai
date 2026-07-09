@@ -31,6 +31,24 @@ export const THEMES = {
   washi:  { label: '和紙', stops: ['#f4eddd', '#ece2cb', '#dccfae'], dust: 0xb08d3e, blobColor: 0xd8c8a0, blobOpacity: 0.3, petal: 0xe8a8b8 },
 };
 
+/** 矢羽メッシュ(+x向き。単位サイズで作り呼び出し側でスケール) */
+function makeArrowMesh(color) {
+  const shape = new THREE.Shape();
+  shape.moveTo(0.15, -0.55);
+  shape.lineTo(0.8, 0);
+  shape.lineTo(0.15, 0.55);
+  shape.lineTo(0.38, 0);
+  shape.closePath();
+  const geo = new THREE.ShapeGeometry(shape);
+  geo.translate(-0.475, 0, 0); // 回転が図形の中心まわりになるよう原点へ寄せる
+  return new THREE.Mesh(
+    geo,
+    new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false,
+    }),
+  );
+}
+
 /** 花びらテクスチャ(白で描いて material.color で染める) */
 function makePetalTexture(size = 64) {
   const c = document.createElement('canvas');
@@ -87,6 +105,7 @@ export class Stage {
 
     this.noteViews = new Map();   // note.id -> group
     this.strokeViews = new Map(); // stroke.id -> view(舞モード)
+    this.flagViews = new Map();   // cmd.id -> view(旗印モード)
     this.fx = [];                 // {update(dt,t)->bool}
     this.trails = { L: [], R: [] };
     this.heads = {};
@@ -344,16 +363,8 @@ export class Stage {
 
     if (note.type === 'swipe') {
       // 払う方向を示す矢羽
-      const shape = new THREE.Shape();
-      shape.moveTo(0.15, -0.55);
-      shape.lineTo(0.8, 0);
-      shape.lineTo(0.15, 0.55);
-      shape.lineTo(0.38, 0);
-      shape.closePath();
-      const arrow = new THREE.Mesh(
-        new THREE.ShapeGeometry(shape),
-        new THREE.MeshBasicMaterial({ color: KIN, transparent: true, opacity: 0.95, side: THREE.DoubleSide, depthWrite: false }),
-      );
+      const arrow = makeArrowMesh(KIN);
+      arrow.material.opacity = 0.95;
       arrow.scale.setScalar(r * 0.9);
       arrow.rotation.z = Math.atan2(-note.dir.y, note.dir.x);
       arrow.position.z = 0.02;
@@ -656,6 +667,82 @@ export class Stage {
 
   clearStrokes() {
     for (const [id, view] of [...this.strokeViews]) this._disposeStrokeView(id, view);
+  }
+
+  // ---- 旗印モード: 矢印出題の表示 ----
+  _createFlagView(cmd) {
+    const g = new THREE.Group();
+    const color = cmd.hand === 'B' ? KIN : HAND_COLORS[cmd.hand];
+    const dir = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } }[cmd.dir];
+    const rot = Math.atan2(-dir.y, dir.x);
+    const xs = cmd.hand === 'B' ? [0.28, 0.72] : [cmd.hand === 'L' ? 0.28 : 0.72];
+    const arrows = [];
+    const rings = [];
+    for (const nx of xs) {
+      const pos = this.worldFromNorm(nx, 0.42, 0.2);
+      const arrow = makeArrowMesh(color);
+      arrow.position.copy(pos);
+      arrow.rotation.z = rot;
+      g.add(arrow);
+      arrows.push(arrow);
+      // 「今!」を示す収縮リング
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(1.5, 1.62, 48),
+        new THREE.MeshBasicMaterial({
+          color: KIN, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false,
+        }),
+      );
+      ring.position.copy(pos);
+      g.add(ring);
+      rings.push(ring);
+    }
+    this.noteGroup.add(g);
+    const view = { group: g, arrows, rings };
+    this.flagViews.set(cmd.id, view);
+    return view;
+  }
+
+  /** ライブ出題を同期する。liveFlags: [{cmd:{id,time,hand,dir}}] */
+  syncFlags(liveFlags, t, appearLead) {
+    const alive = new Set();
+    for (const lf of liveFlags) {
+      alive.add(lf.cmd.id);
+      const view = this.flagViews.get(lf.cmd.id) || this._createFlagView(lf.cmd);
+      const k = Math.max(0, Math.min(1, (t - (lf.cmd.time - appearLead)) / appearLead));
+      const remain = lf.cmd.time - t;
+      // 予告: 小さく淡く → ビートに向けて拡大・明瞭化。直前は脈打つ
+      const pulse = Math.abs(remain) < 0.12 ? 1.15 : 1;
+      const scale = this._noteR * (0.9 + 0.5 * k) * pulse;
+      for (const a of view.arrows) {
+        a.scale.setScalar(scale);
+        a.material.opacity = 0.25 + 0.7 * k;
+      }
+      for (const ring of view.rings) {
+        if (remain < 0.7 && remain > -0.45) {
+          const rk = 1 - Math.max(0, remain / 0.7);
+          ring.material.opacity = 0.75 * rk;
+          ring.scale.setScalar(this._noteR * (1.7 - 0.75 * rk));
+        } else {
+          ring.material.opacity = 0;
+        }
+      }
+    }
+    for (const [id, view] of this.flagViews) {
+      if (!alive.has(id)) this._disposeFlagView(id, view);
+    }
+  }
+
+  _disposeFlagView(id, view) {
+    this.noteGroup.remove(view.group);
+    view.group.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+    this.flagViews.delete(id);
+  }
+
+  clearFlags() {
+    for (const [id, view] of [...this.flagViews]) this._disposeFlagView(id, view);
   }
 
   /** フィーバー(舞ゲージ満タン)の映像効果の切替 */

@@ -10,6 +10,7 @@ import { Game } from './game.js';
 import { renderDemoSong } from './demo-song.js';
 import { generateChart, beatsFromBpm } from './core/chart.js';
 import { generateStrokeChart } from './core/stroke.js';
+import { generateFlagChart } from './core/flag.js';
 import { VERSION } from './version.js';
 
 const params = new URLSearchParams(location.search);
@@ -52,6 +53,7 @@ const input = new InputManager();
 const ui = new UI();
 const stage = new Stage(document.getElementById('stage'));
 window.__kagemai.stage = stage;
+// game も後で代入(判定状態のデバッグ用)
 const videoEl = document.getElementById('camera-video');
 
 const state = {
@@ -84,6 +86,8 @@ const game = new Game({
     onDebug: (text) => ui.debug(text),
   },
 });
+window.__kagemai.game = game;
+window.__kagemai.input = input;
 
 // ---- タイトル ----
 ui.bind('btn-start', () => {
@@ -430,8 +434,8 @@ ui.bind('btn-calib-back', () => stopCalibration());
 for (const btn of document.querySelectorAll('#screen-difficulty .mode-btn')) {
   btn.addEventListener('click', () => {
     const pm = btn.dataset.playmode;
-    if (pm === 'mai') {
-      state.playMode = 'mai';
+    if (pm === 'mai' || pm === 'hata') {
+      state.playMode = pm;
     } else {
       state.playMode = 'timing';
       state.difficulty = pm === 'ranbu' ? 'hard' : 'normal';
@@ -525,11 +529,13 @@ async function beginPlay() {
   }
   const isCamera = mode === 'camera';
   const isMai = state.playMode === 'mai';
+  const isHata = state.playMode === 'hata';
+  const isTiming = !isMai && !isHata;
   videoEl.hidden = !isCamera;
   stage.setCameraMode(isCamera);
-  stage.setLaneGuides(!isMai && mode === 'mouse');
-  document.getElementById('lane-labels').hidden = isMai || mode !== 'mouse';
-  document.getElementById('mai-gauge').hidden = !isMai;
+  stage.setLaneGuides(isTiming && mode === 'mouse');
+  document.getElementById('lane-labels').hidden = !(isTiming && mode === 'mouse');
+  document.getElementById('mai-gauge').hidden = isTiming;
   showScreen('play');
   ui.setHud({ score: 0, combo: 0, progress: 0 });
   const s = state.song;
@@ -554,6 +560,23 @@ async function beginPlay() {
       duration: s.duration,
       playMode: 'mai',
       meta,
+    });
+  } else if (isHata) {
+    ui.setGauge(0, false);
+    game.start({
+      buffer: s.buffer,
+      flags: generateFlagChart({
+        duration: s.duration,
+        bpm: s.bpm,
+        offset: songOffset(),
+        density: settings.density,
+        seed: hashStr(s.name),
+        allowBoth: mode !== 'mouse', // マウスはポインタ1つなので両手指示なし
+      }),
+      duration: s.duration,
+      playMode: 'hata',
+      meta,
+      handStrict: mode !== 'mouse',
     });
   } else {
     game.start({
