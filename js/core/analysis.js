@@ -233,6 +233,101 @@ export function quantizeOnsets(onsets, bpm, offset, subdivision = 2) {
 }
 
 /**
+ * 演出用のエネルギータイムラインを計算する(全帯域RMS、rate Hz)。
+ * 戻り値: {energy: Float32Array(0..1に正規化), rate}
+ * 95パーセンタイルを1として正規化するので、外れ値ピークに潰されない。
+ */
+export function computeEnergyTimeline(channels, sampleRate, { rate = 20 } = {}) {
+  const mono = mixdown(channels);
+  const hop = Math.max(1, Math.floor(sampleRate / rate));
+  const n = Math.floor(mono.length / hop);
+  const energy = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let s = 0;
+    const base = i * hop;
+    for (let j = 0; j < hop; j++) {
+      const v = mono[base + j];
+      s += v * v;
+    }
+    energy[i] = Math.sqrt(s / hop);
+  }
+  const sorted = [...energy].sort((a, b) => a - b);
+  const p95 = sorted[Math.floor(sorted.length * 0.95)] || 0;
+  if (p95 > 0) {
+    for (let i = 0; i < n; i++) energy[i] = Math.min(1, energy[i] / p95);
+  }
+  return { energy, rate: sampleRate / hop };
+}
+
+/**
+ * エネルギータイムラインから「高揚区間」(サビ等の盛り上がり)を検出する。
+ * 戻り値: [{start, end, peak}](秒、時刻順、最大 maxRegions 件)
+ * 平滑化したエネルギーがしきい値(全体分布に対する相対値)を
+ * minLen 秒以上超え続ける区間を採用する。
+ */
+export function detectHighlights(energy, rate, {
+  minLen = 4,
+  mergeGap = 2,
+  maxRegions = 3,
+} = {}) {
+  const n = energy.length;
+  if (n < rate * 10) return []; // 10秒未満の曲では検出しない
+
+  // ±1秒の移動平均で平滑化
+  const win = Math.max(1, Math.round(rate));
+  const smooth = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let s = 0, c = 0;
+    for (let j = Math.max(0, i - win); j <= Math.min(n - 1, i + win); j++) { s += energy[j]; c++; }
+    smooth[i] = s / c;
+  }
+
+  // しきい値: 中央値(通常部)と95パーセンタイル(最盛部)の中間。
+  // 両者が近い(=ダイナミクスの乏しい)曲では検出しない
+  const sorted = [...smooth].sort((a, b) => a - b);
+  const median = sorted[Math.floor(n * 0.5)];
+  const p95 = sorted[Math.floor(n * 0.95)];
+  if (p95 <= 0 || p95 < median * 1.2) return [];
+  const threshold = median + (p95 - median) * 0.5;
+
+  // しきい値超えの連続区間を集める
+  const regions = [];
+  let start = -1;
+  for (let i = 0; i <= n; i++) {
+    const over = i < n && smooth[i] >= threshold;
+    if (over && start < 0) start = i;
+    if (!over && start >= 0) {
+      regions.push({ s: start, e: i });
+      start = -1;
+    }
+  }
+
+  // 近接区間の結合 → 短い区間の除去
+  const merged = [];
+  for (const r of regions) {
+    const last = merged[merged.length - 1];
+    if (last && (r.s - last.e) / rate < mergeGap) last.e = r.e;
+    else merged.push({ ...r });
+  }
+  const long = merged.filter((r) => (r.e - r.s) / rate >= minLen);
+
+  // 平均エネルギーの高い順に maxRegions 件 → 時刻順で返す
+  for (const r of long) {
+    let s = 0, peakV = -1, peakI = r.s;
+    for (let i = r.s; i < r.e; i++) {
+      s += smooth[i];
+      if (smooth[i] > peakV) { peakV = smooth[i]; peakI = i; }
+    }
+    r.mean = s / (r.e - r.s);
+    r.peakI = peakI;
+  }
+  long.sort((a, b) => b.mean - a.mean);
+  return long.slice(0, maxRegions)
+    .sort((a, b) => a.s - b.s)
+    .map((r) => ({ start: r.s / rate, end: r.e / rate, peak: r.peakI / rate }));
+}
+
+/**
  * 一括解析パイプライン。channels: Float32Array[](デコード済みPCM)。
  * onProgress(ratio, label) は任意。
  * 戻り値: {bpm, offset, onsets, quantized, duration, confidence, score}

@@ -1,6 +1,6 @@
 // kagemai — 画面遷移・HUD・ポップアップ等の DOM まわり
 
-const JUDGE_LABELS = { perfect: '極', good: '良', miss: '逸' };
+const JUDGE_LABELS = { perfect: '極', good: '良', miss: '逸', beat: '拍' };
 
 export class UI {
   constructor() {
@@ -46,6 +46,11 @@ export class UI {
     }
     this._lastCombo = combo;
     this.$('hud-progress-bar').style.width = `${(progress * 100).toFixed(1)}%`;
+  }
+
+  setGauge(gauge, fever) {
+    this.$('mai-gauge-fill').style.width = `${(gauge * 100).toFixed(1)}%`;
+    this.$('mai-gauge').classList.toggle('fever', !!fever);
   }
 
   popJudge(judge, x, y) {

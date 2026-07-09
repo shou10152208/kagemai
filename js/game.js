@@ -4,14 +4,21 @@
 // (setTimeout / フレーム数によるタイミング管理は行わない)。
 
 import {
-  JUDGE, judgeNoteHit, judgeTiming, isNoteExpired,
+  JUDGE, judgeNoteHit, judgeTiming, isNoteExpired, isPointerOnNote,
   scoreForJudge, maxPossibleScore, rankForRatio,
 } from './core/judge.js';
+import { sampleStroke, strokeGrade, beatIndex } from './core/stroke.js';
 import { LANE_COUNT } from './input.js';
 
 const LEAD_TIME = 1.8;       // ノーツ出現から判定プレーン到達までの秒数
 const COUNT_IN = 3.4;        // カウントダウン秒数
 const POINTER_COOLDOWN = 0.1; // 同一ポインタの連続ヒット間隔
+
+// 舞モード(なぞり)
+const STROKE_APPEAR = 1.2;    // ストロークが薄く現れてから始まるまでの秒数
+const STROKE_SLACK = 0.35;    // 終了後になぞりを受け付ける猶予
+const STROKE_SAMPLES = 20;    // 経路のサンプル数(カバー率の分母)
+const BEAT_HIT_SPEED = 1.1;   // 拍合ボーナスに必要なポインタ速度
 
 export class Game {
   /**
@@ -48,18 +55,38 @@ export class Game {
     return this.input.mode === 'camera' ? base * 1.35 : base;
   }
 
-  start({ buffer, chart, duration }) {
+  /**
+   * playMode: 'timing'(律/乱舞: 従来のタイミング判定)| 'mai'(舞: なぞり)
+   * timing では chart(ノーツ配列)、mai では strokes(ストローク配列)と
+   * meta {bpm, offset}(拍パルス・拍合用)を渡す。
+   */
+  start({ buffer, chart = [], strokes = [], duration, playMode = 'timing', meta = null }) {
     this.stop(false);
     const ctx = this.audio.ensure();
 
+    this.playMode = playMode;
+    this.meta = meta;
     this.chart = chart.map((n) => ({ ...n, judged: null }));
+    this.strokes = strokes.map((s) => ({
+      stroke: s,
+      samples: sampleStroke(s.points, STROKE_SAMPLES),
+      covered: new Uint8Array(STROKE_SAMPLES),
+      judged: null,
+    }));
     this.duration = duration ?? buffer.duration;
     this.score = 0;
     this.combo = 0;
     this.maxCombo = 0;
     this.counts = { perfect: 0, good: 0, miss: 0 };
+    this.beatHits = 0;
+    this.gauge = 0;
+    this.fever = false;
+    this._lastBeatK = -1;
+    this._hlActive = false;
+    this._hlPeakFired = new Set(); // 発火済みの高揚区間ピーク
     this._nextIdx = 0;
     this._live = [];
+    this._liveStrokes = [];
     this._lastCount = null;
     this._pointerLock = new Map(); // pointerId -> 最終ヒット時刻
     this._fps = { frames: 0, t: 0, value: 0 };
@@ -95,12 +122,20 @@ export class Game {
     if (this.handle) { this.handle.stop(); this.handle = null; }
     if (this._beepBus) { this._beepBus.stop(); this._beepBus = null; }
     if (this.input) this.input.onLaneKey = null;
-    if (this.stage) this.stage.clearNotes();
+    if (this.stage) {
+      this.stage.clearNotes();
+      this.stage.clearStrokes();
+      this.stage.setFever(false);
+      this.stage.setHighlight(false);
+      this.stage.setMusicLevel(0);
+    }
     if (fireCallback && this.cb.onQuit) this.cb.onQuit();
   }
 
   get songTime() {
-    return this.audio.now - this.songStartAt;
+    // タイミング調整(校正値): 正の値 = 音が遅れて聞こえる端末。
+    // ゲーム時間全体(出現・描画・判定)を「耳に届く音」に合わせてずらす。
+    return this.audio.now - this.songStartAt - (this.settings.audioOffsetMs ?? 0) / 1000;
   }
 
   _tick(nowMs) {
@@ -131,6 +166,41 @@ export class Game {
     const pointers = this.input.getPointers();
     const aspect = this.input.aspect;
 
+    if (this.playMode === 'mai') {
+      this._tickMai(t, dt, pointers, aspect);
+    } else {
+      this._tickTiming(t, pointers, aspect, W);
+    }
+    this._tickFx(t);
+
+    this.stage.updatePointers(pointers, dt);
+    this.stage.render(dt, this._elapsed);
+
+    // HUD
+    const hud = {
+      score: this.score,
+      combo: this.combo,
+      progress: Math.max(0, Math.min(1, t / this.duration)),
+    };
+    if (this.playMode === 'mai') {
+      hud.gauge = this.gauge;
+      hud.fever = this.fever;
+    }
+    this.cb.onHud(hud);
+    if (this.cb.onDebug) {
+      const latency = this.inputLatency > 0 ? `  遅延補正 ${Math.round(this.inputLatency * 1000)}ms` : '';
+      this.cb.onDebug(`FPS ${f.value}  入力: ${this.input.mode}  ポインタ: ${pointers.length}${latency}\n` +
+        `t=${t.toFixed(2)}s  残ノーツ ${this.chart.length - this.counts.perfect - this.counts.good - this.counts.miss}`);
+    }
+
+    // 終了判定
+    if (t > this.duration + 0.6) {
+      this._finish();
+    }
+  }
+
+  /** 律/乱舞: 従来のタイミング判定 */
+  _tickTiming(t, pointers, aspect, W) {
     // ノーツのライブ集合を更新
     while (this._nextIdx < this.chart.length && this.chart[this._nextIdx].time - LEAD_TIME <= t) {
       this._live.push(this.chart[this._nextIdx++]);
@@ -152,7 +222,11 @@ export class Game {
             aspect,
             minSwipeSpeed: this.settings.minSwipeSpeed ?? 1.0,
           });
-          if (hit && (!best || n.time < best.note.time)) best = { note: n, ...hit };
+          if (!hit) continue;
+          // カメラ(常時接触)では「置いて待つ」手が窓の開いた瞬間に
+          // 早取りしないよう、perfect窓より早いヒットは見送る
+          if (this.input.mode === 'camera' && hit.dt < -W.perfect) continue;
+          if (!best || n.time < best.note.time) best = { note: n, ...hit };
         }
         if (best) {
           this._pointerLock.set(p.id, t);
@@ -168,28 +242,127 @@ export class Game {
       }
     }
     this._live = this._live.filter((n) => !n.judged);
-
-    // 描画
     this.stage.syncNotes(this._live, t, LEAD_TIME);
-    this.stage.updatePointers(pointers, dt);
-    this.stage.render(dt, this._elapsed);
+  }
 
-    // HUD
-    this.cb.onHud({
-      score: this.score,
-      combo: this.combo,
-      progress: Math.max(0, Math.min(1, t / this.duration)),
-    });
-    if (this.cb.onDebug) {
-      const latency = this.inputLatency > 0 ? `  遅延補正 ${Math.round(this.inputLatency * 1000)}ms` : '';
-      this.cb.onDebug(`FPS ${f.value}  入力: ${this.input.mode}  ポインタ: ${pointers.length}${latency}\n` +
-        `t=${t.toFixed(2)}s  残ノーツ ${this.chart.length - this.counts.perfect - this.counts.good - this.counts.miss}`);
+  /** 舞: なぞり(カバー率)判定+拍合ボーナス+舞ゲージ */
+  _tickMai(t, dt, pointers, aspect) {
+    while (this._nextIdx < this.strokes.length &&
+           this.strokes[this._nextIdx].stroke.tStart - STROKE_APPEAR <= t) {
+      this._liveStrokes.push(this.strokes[this._nextIdx++]);
     }
 
-    // 終了判定
-    if (t > this.duration + 0.6) {
-      this._finish();
+    const radius = this.judgeRadius * 1.3;
+    for (const ls of this._liveStrokes) {
+      if (ls.judged) continue;
+      const { tStart, tEnd } = ls.stroke;
+      if (t < tStart - 0.15) continue;
+      if (t <= tEnd + STROKE_SLACK) {
+        // なぞり中: ポインタが触れたサンプルを塗っていく
+        for (const p of pointers) {
+          if (!p.active) continue;
+          for (let i = 0; i < ls.samples.length; i++) {
+            if (ls.covered[i]) continue;
+            const s = ls.samples[i];
+            if (isPointerOnNote(p.x, p.y, s.x, s.y, radius, aspect)) ls.covered[i] = 1;
+          }
+        }
+      } else {
+        // 締め切り: カバー率で評価を確定
+        let c = 0;
+        for (const v of ls.covered) c += v;
+        this._applyStrokeGrade(ls, strokeGrade(c / ls.covered.length));
+      }
     }
+    this._liveStrokes = this._liveStrokes.filter((ls) => !ls.judged);
+
+    // 拍パルスと拍合ボーナス(拍の瞬間に手が動いていれば加点)
+    if (t >= 0 && this.meta) {
+      const k = beatIndex(t, this.meta.bpm, this.meta.offset);
+      if (k !== this._lastBeatK) {
+        this._lastBeatK = k;
+        this.stage.beatPulse();
+        const mover = pointers.find((p) => p.active && Math.hypot(p.vx, p.vy) > BEAT_HIT_SPEED);
+        if (mover) {
+          this.beatHits++;
+          this.score += Math.round(20 * (this.fever ? 1.5 : 1));
+          this.gauge = Math.min(1, this.gauge + 0.03);
+          if (this.cb.onBeatHit) this.cb.onBeatHit(mover);
+        }
+      }
+    }
+
+    // 舞ゲージ: 満タンでフィーバー、フィーバー中は消費
+    if (this.fever) {
+      this.gauge -= dt / 8;
+      if (this.gauge <= 0) {
+        this.gauge = 0;
+        this.fever = false;
+        this.stage.setFever(false);
+      }
+    } else {
+      this.gauge = Math.max(0, this.gauge - dt * 0.03);
+      if (this.gauge >= 1) {
+        this.fever = true;
+        this.stage.setFever(true);
+      }
+    }
+
+    this.stage.syncStrokes(this._liveStrokes, t, STROKE_APPEAR);
+  }
+
+  /** 演出: 音楽反応背景と華の刻(高揚区間)・花火 */
+  _tickFx(t) {
+    const m = this.meta;
+    if (!m) return;
+
+    // 背景の呼吸(エネルギータイムライン)
+    if (m.energy && m.energyRate) {
+      const i = Math.floor(t * m.energyRate);
+      this.stage.setMusicLevel(t >= 0 && i >= 0 && i < m.energy.length ? m.energy[i] : 0);
+    }
+
+    // 華の刻: 高揚区間に入ると桜吹雪、ピークで花火
+    if (m.highlights && m.highlights.length) {
+      const region = t >= 0 ? m.highlights.find((h) => t >= h.start && t < h.end) : null;
+      const active = !!region;
+      if (active !== this._hlActive) {
+        this._hlActive = active;
+        this.stage.setHighlight(active);
+      }
+      if (region && !this._hlPeakFired.has(region.peak) && t >= region.peak) {
+        this._hlPeakFired.add(region.peak);
+        this.stage.fireworks(3);
+        this.audio.boom();
+      }
+    }
+
+    // 動的品質: FPS が落ちたら演出負荷と解像度を下げる
+    const fps = this._fps.value;
+    if (fps > 0) {
+      if (fps < 40 && this.stage.quality > 0.5) this.stage.setQuality(0.5);
+      else if (fps > 54 && this.stage.quality < 1) this.stage.setQuality(1);
+    }
+  }
+
+  _applyStrokeGrade(ls, grade) {
+    ls.judged = grade;
+    const mult = this.fever ? 1.5 : 1;
+    if (grade === JUDGE.MISS) {
+      this.combo = 0;
+      this.counts.miss++;
+      this.gauge = Math.max(0, this.gauge - 0.12);
+    } else {
+      this.score += Math.round(3 * scoreForJudge(grade, this.combo) * mult);
+      this.combo++;
+      this.maxCombo = Math.max(this.maxCombo, this.combo);
+      this.counts[grade]++;
+      this.gauge = Math.min(1, this.gauge + (grade === JUDGE.PERFECT ? 0.15 : 0.08));
+    }
+    const end = ls.samples[ls.samples.length - 1];
+    this.audio.hitSound(this.settings.hitSound, grade, (this.settings.hitVolume ?? 80) / 100);
+    this.stage.hitFx(end.x, end.y, grade);
+    this.cb.onJudge(grade, { x: end.x, y: end.y });
   }
 
   /** キーボードレーン入力(D/F/J/K)。押下時刻の音声時計で判定する。 */
@@ -225,9 +398,10 @@ export class Game {
   }
 
   _finish() {
-    const total = this.chart.length;
-    const max = maxPossibleScore(total);
-    const ratio = max > 0 ? this.score / max : 0;
+    const isMai = this.playMode === 'mai';
+    const total = isMai ? this.strokes.length : this.chart.length;
+    const max = (isMai ? 3 : 1) * maxPossibleScore(total);
+    const ratio = max > 0 ? Math.min(1, this.score / max) : 0;
     const results = {
       score: this.score,
       maxCombo: this.maxCombo,
@@ -235,6 +409,8 @@ export class Game {
       total,
       ratio,
       rank: rankForRatio(ratio),
+      playMode: this.playMode,
+      beatHits: this.beatHits,
     };
     this.stop(false);
     this.cb.onFinish(results);

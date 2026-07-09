@@ -113,11 +113,43 @@ test('設定: ヒット音の切替(試聴)と判定窓・デバッグ表示の�
   await expect(page.locator('#camlat-value')).toHaveText('150ms');
   const savedLat = await page.evaluate(() => JSON.parse(localStorage.getItem('kagemai-settings')).cameraLatencyMs);
   expect(savedLat).toBe(150);
+
+  // タイミング調整スライダー
+  await page.locator('#offset-slider').fill('-100');
+  await expect(page.locator('#offset-value')).toHaveText('-100ms');
+  const savedOffset = await page.evaluate(() => JSON.parse(localStorage.getItem('kagemai-settings')).audioOffsetMs);
+  expect(savedOffset).toBe(-100);
   await page.locator('#debug-toggle').check();
   await expect(page.locator('#debug-overlay')).toBeVisible();
 
   await page.locator('#btn-settings-close').click();
   await expect(page.locator('#settings-modal')).toBeHidden();
+  expect(errors).toEqual([]);
+});
+
+test('タイミング校正: タップして測定値を保存できる', async ({ page }) => {
+  const errors = watchErrors(page);
+
+  await page.goto('/');
+  await page.getByTestId('start').click();
+  await page.getByTestId('mode-mouse').click();
+  await page.locator('#btn-settings').click();
+  await page.locator('#btn-calibrate').click();
+  await expect(page.locator('#screen-calibration')).toBeVisible();
+
+  // ビート(0.6s間隔、1.2s後開始)に合わせて 10回タップ(練習2+計測8)
+  await page.waitForTimeout(1300);
+  for (let i = 0; i < 10; i++) {
+    await page.mouse.click(200, 400);
+    await page.waitForTimeout(600);
+  }
+  await expect(page.locator('#calib-status')).toContainText('聞こえています', { timeout: 10_000 });
+  await page.getByTestId('calib-done').click();
+  await expect(page.locator('#screen-song')).toBeVisible();
+
+  // 測定値(数値)が保存されている
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('kagemai-settings')).audioOffsetMs);
+  expect(typeof saved).toBe('number');
   expect(errors).toEqual([]);
 });
 

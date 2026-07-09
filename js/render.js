@@ -25,11 +25,34 @@ function makeDabTexture(size = 128) {
 
 // 背景テーマ(非カメラモードのWebGL背景。UI側の色は CSS の body[data-theme])
 export const THEMES = {
-  sumi:   { label: '墨',   stops: ['#221c14', '#171310', '#0b0908'], dust: 0xc9a24b, blobColor: 0x000000, blobOpacity: 0.4 },
-  yoi:    { label: '宵',   stops: ['#26304e', '#181f36', '#0b0e1c'], dust: 0x9db8e8, blobColor: 0x060a18, blobOpacity: 0.35 },
-  sakura: { label: '桜',   stops: ['#f7e9eb', '#f0d8dd', '#e2bfc9'], dust: 0xd98da0, blobColor: 0xf8b8c8, blobOpacity: 0.3 },
-  washi:  { label: '和紙', stops: ['#f4eddd', '#ece2cb', '#dccfae'], dust: 0xb08d3e, blobColor: 0xd8c8a0, blobOpacity: 0.3 },
+  sumi:   { label: '墨',   stops: ['#221c14', '#171310', '#0b0908'], dust: 0xc9a24b, blobColor: 0x000000, blobOpacity: 0.4, petal: 0xd9b45a },
+  yoi:    { label: '宵',   stops: ['#26304e', '#181f36', '#0b0e1c'], dust: 0x9db8e8, blobColor: 0x060a18, blobOpacity: 0.35, petal: 0xaec6f0 },
+  sakura: { label: '桜',   stops: ['#f7e9eb', '#f0d8dd', '#e2bfc9'], dust: 0xd98da0, blobColor: 0xf8b8c8, blobOpacity: 0.3, petal: 0xf5b8c8 },
+  washi:  { label: '和紙', stops: ['#f4eddd', '#ece2cb', '#dccfae'], dust: 0xb08d3e, blobColor: 0xd8c8a0, blobOpacity: 0.3, petal: 0xe8a8b8 },
 };
+
+/** 花びらテクスチャ(白で描いて material.color で染める) */
+function makePetalTexture(size = 64) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  g.translate(size / 2, size / 2);
+  const grad = g.createRadialGradient(0, -size * 0.1, 0, 0, 0, size * 0.45);
+  grad.addColorStop(0, 'rgba(255,255,255,0.95)');
+  grad.addColorStop(1, 'rgba(255,255,255,0.55)');
+  g.fillStyle = grad;
+  // 桜の花びら: しずく形+先端の切れ込み
+  g.beginPath();
+  g.moveTo(0, -size * 0.42);
+  g.bezierCurveTo(size * 0.3, -size * 0.28, size * 0.26, size * 0.18, 0, size * 0.4);
+  g.bezierCurveTo(-size * 0.26, size * 0.18, -size * 0.3, -size * 0.28, 0, -size * 0.42);
+  g.fill();
+  g.globalCompositeOperation = 'destination-out';
+  g.beginPath();
+  g.arc(0, -size * 0.5, size * 0.11, 0, Math.PI * 2);
+  g.fill();
+  return new THREE.CanvasTexture(c);
+}
 
 function makeBgTexture(stops) {
   const c = document.createElement('canvas');
@@ -62,13 +85,32 @@ export class Stage {
     this.laneGroup = new THREE.Group();
     this.scene.add(this.bgGroup, this.laneGroup, this.noteGroup, this.fxGroup, this.brushGroup);
 
-    this.noteViews = new Map(); // note.id -> group
-    this.fx = [];               // {update(dt,t)->bool}
+    this.noteViews = new Map();   // note.id -> group
+    this.strokeViews = new Map(); // stroke.id -> view(舞モード)
+    this.fx = [];                 // {update(dt,t)->bool}
     this.trails = { L: [], R: [] };
     this.heads = {};
+    this._pulse = 0;
+    this.feverOn = false;
+    this.highlightOn = false;   // 華の刻(曲の高揚区間)
+    this._music = 0;            // 音楽エネルギー(平滑化済み 0..1)
+    this._musicTarget = 0;
+    this.quality = 1;           // 動的品質(FPS低下時に 0.5)
+
+    // フィーバー/拍パルス用の金色オーバーレイ(カメラモードでも使う)
+    this.feverOverlay = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({
+        color: KIN, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }),
+    );
+    this.feverOverlay.position.z = 3;
+    this.scene.add(this.feverOverlay);
 
     this._buildBackground();
     this._buildBrushes();
+    this._buildPetals();
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
@@ -106,6 +148,10 @@ export class Stage {
     this.setJudgeRadius(this._judgeNormR || 0.09);
     this._layoutBackground();
     this._layoutLanes();
+    if (this.feverOverlay) {
+      const { w: fw, h: fh } = this.planeSize(3);
+      this.feverOverlay.scale.set(fw * 1.1, fh * 1.1, 1);
+    }
   }
 
   setCameraMode(on) {
@@ -131,6 +177,9 @@ export class Stage {
       b.material.color.setHex(theme.blobColor);
       b.material.opacity = theme.blobOpacity;
     }
+    if (this.petals) {
+      for (const p of this.petals) p.material.color.setHex(theme.petal);
+    }
   }
 
   _buildBackground() {
@@ -150,6 +199,7 @@ export class Stage {
       s.position.set((i - 1) * 8, (i % 2) * 5 - 2, -38 - i * 6);
       s.scale.setScalar(26 + i * 8);
       s.userData.phase = i * 2.1;
+      s.userData.baseScale = 26 + i * 8;
       this.inkBlobs.push(s);
       this.bgGroup.add(s);
     }
@@ -351,6 +401,245 @@ export class Stage {
     this.noteViews.delete(id);
   }
 
+  // ---- 桜吹雪(華の刻・フィーバー中に舞う) ----
+  _buildPetals() {
+    this.petalTexture = makePetalTexture();
+    this.petalGroup = new THREE.Group();
+    this.scene.add(this.petalGroup);
+    this.petals = [];
+    for (let i = 0; i < 70; i++) {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: this.petalTexture, color: THEMES.sumi.petal,
+        transparent: true, opacity: 0, depthWrite: false,
+      }));
+      s.visible = false;
+      s.userData = { active: false };
+      this.petals.push(s);
+      this.petalGroup.add(s);
+    }
+    this._petalTimer = 0;
+  }
+
+  _spawnPetal() {
+    const p = this.petals.find((s) => !s.userData.active);
+    if (!p) return;
+    const z = -6 - Math.random() * 14;
+    const { w, h } = this.planeSize(z);
+    const u = p.userData;
+    u.active = true;
+    u.z = z;
+    u.vy = -(0.35 + Math.random() * 0.4) * h * 0.14;   // 落下速度(奥行きに比例)
+    u.sway = 0.6 + Math.random() * 0.8;
+    u.phase = Math.random() * Math.PI * 2;
+    u.rot = (Math.random() - 0.5) * 3;
+    p.position.set((Math.random() - 0.5) * w, h * 0.55, z);
+    p.scale.setScalar(h * (0.014 + Math.random() * 0.012));
+    p.material.rotation = Math.random() * Math.PI * 2;
+    p.material.opacity = 0.85;
+    p.visible = true;
+  }
+
+  _updatePetals(dt, elapsed) {
+    const emitting = this.highlightOn || this.feverOn;
+    if (emitting) {
+      this._petalTimer += dt;
+      const interval = 1 / (12 * this.quality); // 秒あたりの発生数
+      while (this._petalTimer > interval) {
+        this._petalTimer -= interval;
+        this._spawnPetal();
+      }
+    }
+    for (const p of this.petals) {
+      const u = p.userData;
+      if (!u.active) continue;
+      p.position.y += u.vy * dt;
+      p.position.x += Math.sin(elapsed * u.sway + u.phase) * dt * 0.8;
+      p.material.rotation += u.rot * dt;
+      const { h } = this.planeSize(u.z);
+      if (p.position.y < -h * 0.6) {
+        u.active = false;
+        p.visible = false;
+      } else if (!emitting) {
+        // 発生停止後はフェードアウト
+        p.material.opacity -= dt * 0.5;
+        if (p.material.opacity <= 0) { u.active = false; p.visible = false; }
+      }
+    }
+  }
+
+  // ---- 打ち上げ花火(高揚区間のピーク等) ----
+  fireworks(count = 1) {
+    for (let i = 0; i < count; i++) {
+      this._launchFirework(i * 0.35);
+    }
+  }
+
+  _launchFirework(delay = 0) {
+    const colors = [0xc9a24b, 0xd9553b, 0x5878a8];
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    const { w, h } = this.planeSize(-10);
+    const x = (Math.random() - 0.5) * w * 0.7;
+    const burstY = h * (0.05 + Math.random() * 0.22);
+
+    const streak = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: this.dab, color: 0xf0e0b8, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    streak.position.set(x, -h * 0.55, -10);
+    streak.scale.setScalar(h * 0.02);
+    this.fxGroup.add(streak);
+
+    const RISE = 0.55;
+    const N = 34;
+    let t = -delay;
+    let exploded = false;
+    let sparks = null;
+    this.fx.push((dt) => {
+      t += dt;
+      if (t < 0) return true;
+      if (t < RISE) {
+        // 上昇
+        const k = t / RISE;
+        streak.material.opacity = 0.9 * (1 - k * 0.4);
+        streak.position.y = -h * 0.55 + (burstY + h * 0.55) * (1 - (1 - k) * (1 - k));
+        return true;
+      }
+      if (!exploded) {
+        exploded = true;
+        this.fxGroup.remove(streak);
+        streak.material.dispose();
+        sparks = [];
+        for (let i = 0; i < N; i++) {
+          const s = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: this.dab, color, transparent: true, opacity: 1,
+            blending: THREE.AdditiveBlending, depthWrite: false,
+          }));
+          s.position.set(x, burstY, -10);
+          const a = (i / N) * Math.PI * 2;
+          const speed = h * (0.18 + Math.random() * 0.1);
+          s.userData.v = new THREE.Vector3(Math.cos(a) * speed, Math.sin(a) * speed, 0);
+          s.userData.tw = Math.random() * Math.PI * 2;
+          s.scale.setScalar(h * 0.016);
+          sparks.push(s);
+          this.fxGroup.add(s);
+        }
+      }
+      const life = (t - RISE) / 1.3;
+      for (const s of sparks) {
+        s.position.addScaledVector(s.userData.v, dt);
+        s.userData.v.multiplyScalar(0.97);
+        s.userData.v.y -= h * 0.06 * dt; // 重力
+        s.material.opacity = Math.max(0, (1 - life)) * (0.65 + 0.35 * Math.sin(t * 24 + s.userData.tw));
+      }
+      if (life >= 1) {
+        for (const s of sparks) { this.fxGroup.remove(s); s.material.dispose(); }
+        return false;
+      }
+      return true;
+    });
+  }
+
+  /** 華の刻(曲の高揚区間)の切替 */
+  setHighlight(on) {
+    this.highlightOn = on;
+  }
+
+  /** 音楽エネルギー(0..1)。背景の脈動に使う */
+  setMusicLevel(v) {
+    this._musicTarget = Math.max(0, Math.min(1, v));
+  }
+
+  /** 動的品質(FPS低下時に負荷を下げる) */
+  setQuality(q) {
+    this.quality = q;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, q < 1 ? 1 : 2));
+  }
+
+  // ---- 舞モード: ストローク(なぞりノーツ)描画 ----
+  _createStrokeView(stroke, samples) {
+    const g = new THREE.Group();
+    const color = HAND_COLORS[stroke.hand];
+    const dabs = [];
+    for (const s of samples) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: this.dab, color, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+      sp.position.copy(this.worldFromNorm(s.x, s.y, 0));
+      sp.scale.setScalar(this._noteR * 0.9);
+      dabs.push(sp);
+      g.add(sp);
+    }
+    // 進行ヘッド(いまなぞるべき位置を示す金の光)
+    const head = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: this.dab, color: KIN, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    head.scale.setScalar(this._noteR * 2.0);
+    g.add(head);
+    this.noteGroup.add(g);
+    const view = { group: g, dabs, head };
+    this.strokeViews.set(stroke.id, view);
+    return view;
+  }
+
+  /**
+   * ライブストロークを同期する。
+   * liveStrokes: [{stroke:{id,tStart,tEnd}, samples, covered:Uint8Array}]
+   */
+  syncStrokes(liveStrokes, t, appearLead) {
+    const alive = new Set();
+    for (const ls of liveStrokes) {
+      alive.add(ls.stroke.id);
+      const view = this.strokeViews.get(ls.stroke.id) || this._createStrokeView(ls.stroke, ls.samples);
+      const { tStart, tEnd } = ls.stroke;
+      const fadeIn = Math.max(0, Math.min(1, (t - (tStart - appearLead)) / 0.4));
+      const active = t >= tStart - 0.15;
+      for (let i = 0; i < view.dabs.length; i++) {
+        const d = view.dabs[i];
+        if (ls.covered[i]) {
+          d.material.color.setHex(KIN);
+          d.material.opacity = 0.95;
+          d.scale.setScalar(this._noteR * 1.35);
+        } else {
+          d.material.opacity = fadeIn * (active ? 0.6 : 0.28);
+        }
+      }
+      if (t >= tStart - 0.05 && t <= tEnd + 0.1) {
+        const u = Math.max(0, Math.min(1, (t - tStart) / (tEnd - tStart)));
+        const idx = Math.min(ls.samples.length - 1, Math.round(u * (ls.samples.length - 1)));
+        const s = ls.samples[idx];
+        view.head.position.copy(this.worldFromNorm(s.x, s.y, 0.1));
+        view.head.material.opacity = 0.85;
+      } else {
+        view.head.material.opacity = 0;
+      }
+    }
+    for (const [id, view] of this.strokeViews) {
+      if (!alive.has(id)) this._disposeStrokeView(id, view);
+    }
+  }
+
+  _disposeStrokeView(id, view) {
+    this.noteGroup.remove(view.group);
+    view.group.traverse((o) => { if (o.material) o.material.dispose(); });
+    this.strokeViews.delete(id);
+  }
+
+  clearStrokes() {
+    for (const [id, view] of [...this.strokeViews]) this._disposeStrokeView(id, view);
+  }
+
+  /** フィーバー(舞ゲージ満タン)の映像効果の切替 */
+  setFever(on) {
+    this.feverOn = on;
+  }
+
+  /** 拍に合わせた画面の微かな明滅(舞モード) */
+  beatPulse() {
+    this._pulse = 1;
+  }
+
   // ---- ヒットエフェクト ----
   hitFx(nx, ny, judge) {
     const colors = { perfect: KIN, good: 0x8fa8cc, miss: 0x4a443c };
@@ -412,21 +701,36 @@ export class Stage {
   }
 
   render(dt, elapsed) {
+    // 音楽エネルギーの平滑化(背景の呼吸)
+    this._music += (this._musicTarget - this._music) * Math.min(1, dt * 6);
+    const music = this._music;
+
     // 背景アニメーション
     if (this.bgGroup.visible) {
       for (const b of this.inkBlobs) {
         const ph = b.userData.phase;
         b.position.x += Math.sin(elapsed * 0.07 + ph) * dt * 0.4;
         b.position.y += Math.cos(elapsed * 0.05 + ph) * dt * 0.25;
+        b.scale.setScalar(b.userData.baseScale * (1 + 0.16 * music)); // 低音で膨らむ
       }
       const pos = this.dust.geometry.attributes.position;
       for (let i = 0; i < pos.count; i++) {
-        let y = pos.getY(i) + dt * 0.25;
+        let y = pos.getY(i) + dt * (0.25 + music * 0.6);
         if (y > 10) y = -10;
         pos.setY(i, y);
       }
       pos.needsUpdate = true;
+      this.dust.material.opacity = 0.35 + 0.35 * music;
     }
+
+    // 桜吹雪
+    this._updatePetals(dt, elapsed);
+
+    // フィーバー/華の刻/拍パルスのオーバーレイ
+    this._pulse = Math.max(0, this._pulse - dt * 4);
+    const feverGlow = this.feverOn ? 0.09 + 0.04 * Math.sin(elapsed * 6) : 0;
+    const highlightGlow = this.highlightOn ? 0.045 + 0.02 * music : 0;
+    this.feverOverlay.material.opacity = Math.min(0.2, feverGlow + highlightGlow + this._pulse * 0.06);
     // エフェクト更新
     this.fx = this.fx.filter((fn) => fn(dt));
     this.renderer.render(this.scene, this.camera);

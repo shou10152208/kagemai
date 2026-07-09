@@ -9,6 +9,7 @@ import { UI } from './ui.js';
 import { Game } from './game.js';
 import { renderDemoSong } from './demo-song.js';
 import { generateChart, beatsFromBpm } from './core/chart.js';
+import { generateStrokeChart } from './core/stroke.js';
 import { VERSION } from './version.js';
 
 const params = new URLSearchParams(location.search);
@@ -25,6 +26,7 @@ const DEFAULT_SETTINGS = {
   hitVolume: 80,
   theme: 'sumi',
   cameraLatencyMs: 100,
+  audioOffsetMs: 0,
 };
 function loadSettings() {
   try {
@@ -40,6 +42,7 @@ const settings = loadSettings();
 
 // ---- E2E/デバッグ用フック ----
 window.__kagemai = { screen: null, errors: [], settings, version: VERSION };
+// stage は後で代入(演出のデバッグ・E2E検証用)
 window.addEventListener('error', (e) => window.__kagemai.errors.push(String(e.message)));
 window.addEventListener('unhandledrejection', (e) => window.__kagemai.errors.push(String(e.reason)));
 
@@ -48,10 +51,12 @@ const audio = new AudioEngine();
 const input = new InputManager();
 const ui = new UI();
 const stage = new Stage(document.getElementById('stage'));
+window.__kagemai.stage = stage;
 const videoEl = document.getElementById('camera-video');
 
 const state = {
-  song: null,        // {type, name, buffer, bpm, offset, duration, onsets}
+  song: null,        // {type, name, buffer, bpm, offset, duration, onsets, nudgeMs}
+  playMode: 'mai',   // 'mai'(なぞり) | 'timing'(律/乱舞)
   difficulty: 'normal',
   recommended: 'mouse',
 };
@@ -68,7 +73,11 @@ const game = new Game({
   audio, input, stage, settings,
   callbacks: {
     onJudge: (judge, note) => ui.popJudge(judge, note.x, note.y),
-    onHud: (hud) => ui.setHud(hud),
+    onBeatHit: (pointer) => ui.popJudge('beat', pointer.x, pointer.y - 0.06),
+    onHud: (hud) => {
+      ui.setHud(hud);
+      if (hud.gauge !== undefined) ui.setGauge(hud.gauge, hud.fever);
+    },
     onCountdown: (n) => ui.countdown(n),
     onFinish: (results) => showResult(results),
     onQuit: () => {},
@@ -123,10 +132,18 @@ async function loadDemo() {
   try {
     const short = params.get('song') === 'short';
     const demo = await renderDemoSong({ short });
+    // 演出用のエネルギー/高揚区間だけワーカーで解析(BPMは既知)
+    let fx = { energy: null, energyRate: 0, highlights: [] };
+    try {
+      fx = await analyzeInWorker(demo.buffer, () => {}, { energyOnly: true });
+    } catch { /* 演出情報なしでも遊べる */ }
     state.song = {
       type: 'demo',
       ...demo,
       onsets: beatsFromBpm(demo.bpm, demo.offset, demo.duration),
+      energy: fx.energy ? new Float32Array(fx.energy) : null,
+      energyRate: fx.energyRate,
+      highlights: fx.highlights || [],
     };
     ui.hideProgress();
     showSongInfo('生成成功');
@@ -166,6 +183,9 @@ async function loadFile(file) {
       offset: analysis.offset,
       duration: buffer.duration,
       onsets: analysis.quantized,
+      energy: analysis.energy ? new Float32Array(analysis.energy) : null,
+      energyRate: analysis.energyRate,
+      highlights: analysis.highlights || [],
     };
     ui.hideProgress();
     showSongInfo(`デコード成功(${buffer.duration.toFixed(0)}秒 / ${buffer.numberOfChannels}ch)`);
@@ -175,8 +195,8 @@ async function loadFile(file) {
   }
 }
 
-/** 解析は Web Worker で実行(UI をブロックしない) */
-function analyzeInWorker(buffer, onProgress) {
+/** 解析は Web Worker で実行(UI をブロックしない)。energyOnly=true で演出用解析のみ */
+function analyzeInWorker(buffer, onProgress, { energyOnly = false } = {}) {
   return new Promise((resolve, reject) => {
     let worker;
     try {
@@ -199,17 +219,24 @@ function analyzeInWorker(buffer, onProgress) {
     for (let i = 0; i < buffer.numberOfChannels; i++) {
       channels.push(buffer.getChannelData(i).slice().buffer);
     }
-    worker.postMessage({ channels, sampleRate: buffer.sampleRate }, channels);
+    worker.postMessage({ channels, sampleRate: buffer.sampleRate, energyOnly }, channels);
   });
+}
+
+/** 解析グリッドの微調整(プレビューで合わせたズレ)込みのオフセット */
+function songOffset() {
+  const s = state.song;
+  return s.offset + (s.nudgeMs ?? 0) / 1000;
 }
 
 function currentChart(difficulty = state.difficulty) {
   const s = state.song;
+  const nudge = (s.nudgeMs ?? 0) / 1000;
   return generateChart({
     duration: s.duration,
     bpm: s.bpm,
-    offset: s.offset,
-    onsets: s.onsets,
+    offset: songOffset(),
+    onsets: (s.onsets || []).map((o) => ({ ...o, time: o.time + nudge })),
     density: settings.density,
     difficulty,
     seed: hashStr(s.name),
@@ -254,23 +281,25 @@ function startPreview() {
   const ctx = audio.ensure();
   const startAt = ctx.currentTime + 0.4;
   const beat = 60 / s.bpm;
+  const offset = songOffset();
   // 全ビートのクリックを AudioContext に予約(setTimeout 不使用)。
   // 停止時にまとめて消せるよう専用バスに出力する。
   const clickBus = audio.createBus();
   let n = 0;
-  for (let k = 0, t = s.offset; t < s.duration; k++, t = s.offset + k * beat) {
+  for (let k = 0, t = offset; t < s.duration; k++, t = offset + k * beat) {
     if (t < 0) continue;
     audio.click(startAt + t, k % 4 === 0, clickBus.node);
     n++;
   }
+  const nudge = s.nudgeMs ?? 0;
   document.getElementById('preview-status').textContent =
-    `推定BPM ${s.bpm.toFixed(1)} ／ ビート数 ${n} ／ グリッド開始 ${s.offset.toFixed(2)}s`;
+    `推定BPM ${s.bpm.toFixed(1)} ／ ビート数 ${n} ／ 微調整 ${nudge > 0 ? '+' : ''}${nudge}ms`;
   const handle = audio.playBufferAt(s.buffer, startAt, { onended: () => stopPreview() });
   const lamp = document.getElementById('beat-lamp');
   let raf = 0;
   const loop = () => {
     raf = requestAnimationFrame(loop);
-    const t = ctx.currentTime - startAt - s.offset;
+    const t = ctx.currentTime - startAt - offset;
     const phase = ((t / beat) % 1 + 1) % 1;
     lamp.classList.toggle('on', t >= 0 && phase < 0.18);
   };
@@ -283,15 +312,130 @@ function startPreview() {
   };
 }
 
+/** グリッド微調整: プレビュー再生中なら新しい値で自動的にかけ直す */
+function nudgeGrid(deltaMs) {
+  const s = state.song;
+  if (!s) return;
+  s.nudgeMs = Math.max(-200, Math.min(200, (s.nudgeMs ?? 0) + deltaMs));
+  if (previewCleanup) { previewCleanup(); previewCleanup = null; }
+  startPreview();
+}
+ui.bind('btn-nudge-early', () => nudgeGrid(-20));
+ui.bind('btn-nudge-late', () => nudgeGrid(20));
+
 function stopPreview() {
   if (previewCleanup) { previewCleanup(); previewCleanup = null; }
   if (ui.current === 'preview') showScreen('song');
 }
 
+// ---- タイミング校正(タップで端末の音の遅れを測る) ----
+let calibCleanup = null;
+let calibReturnScreen = 'mode';
+
+function startCalibration() {
+  if (ui.current !== 'calibration') {
+    calibReturnScreen = ['song', 'mode', 'difficulty', 'result'].includes(ui.current) ? ui.current : 'mode';
+  }
+  document.getElementById('settings-modal').hidden = true;
+  showScreen('calibration');
+
+  const ctx = audio.ensure();
+  const bus = audio.createBus();
+  const beat = 0.6; // 100 BPM
+  const first = ctx.currentTime + 1.2;
+  const totalBeats = 20;
+  for (let i = 0; i < totalBeats; i++) {
+    audio.beep(first + i * beat, { freq: 880, dur: 0.08, gain: 0.4, out: bus.node });
+  }
+
+  const statusEl = document.getElementById('calib-status');
+  const lamp = document.getElementById('calib-lamp');
+  const doneBtn = document.getElementById('btn-calib-done');
+  const retryBtn = document.getElementById('btn-calib-retry');
+  doneBtn.hidden = true;
+  retryBtn.hidden = true;
+  statusEl.textContent = 'まもなく音が始まります…';
+
+  const PRACTICE = 2;
+  const NEEDED = 8;
+  const taps = [];
+  let result = null;
+
+  const onTap = (e) => {
+    if (e.target.closest('button')) return; // ボタン操作は計測しない
+    const now = audio.now;
+    const k = Math.round((now - first) / beat);
+    if (k < 0 || k >= totalBeats || result !== null) return;
+    const diff = (now - (first + k * beat)) * 1000;
+    if (Math.abs(diff) > 280) return; // ビートから離れすぎたタップは無視
+    taps.push(diff);
+    const measured = Math.max(0, taps.length - PRACTICE);
+    if (taps.length <= PRACTICE) {
+      statusEl.textContent = `練習 ${taps.length}/${PRACTICE}`;
+    } else if (measured < NEEDED) {
+      statusEl.textContent = `計測中 ${measured}/${NEEDED}`;
+    }
+    if (measured >= NEEDED) {
+      const samples = taps.slice(PRACTICE).sort((a, b) => a - b);
+      result = Math.round(samples[Math.floor(samples.length / 2)] / 10) * 10;
+      statusEl.textContent = `あなたの端末では音が約 ${result}ms ${result >= 0 ? '遅れて' : '早く'}聞こえています`;
+      doneBtn.hidden = false;
+      retryBtn.hidden = false;
+      bus.stop();
+    }
+  };
+  const onKey = (e) => {
+    if (e.code === 'Space') { e.preventDefault(); onTap(e); }
+  };
+  window.addEventListener('pointerdown', onTap);
+  window.addEventListener('keydown', onKey);
+
+  let raf = 0;
+  const loop = () => {
+    raf = requestAnimationFrame(loop);
+    const t = audio.now - first;
+    const phase = ((t / beat) % 1 + 1) % 1;
+    lamp.classList.toggle('on', t >= 0 && t < totalBeats * beat && phase < 0.18);
+  };
+  raf = requestAnimationFrame(loop);
+
+  doneBtn.onclick = () => {
+    if (result !== null) {
+      settings.audioOffsetMs = result;
+      saveSettings();
+      ui.toast(`タイミング調整を ${result}ms に設定しました`);
+    }
+    stopCalibration();
+  };
+  calibCleanup = () => {
+    cancelAnimationFrame(raf);
+    bus.stop();
+    window.removeEventListener('pointerdown', onTap);
+    window.removeEventListener('keydown', onKey);
+    lamp.classList.remove('on');
+    doneBtn.onclick = null;
+  };
+}
+
+function stopCalibration() {
+  if (calibCleanup) { calibCleanup(); calibCleanup = null; }
+  showScreen(calibReturnScreen);
+}
+
+ui.bind('btn-calibrate', () => startCalibration());
+ui.bind('btn-calib-retry', () => { if (calibCleanup) { calibCleanup(); calibCleanup = null; } startCalibration(); });
+ui.bind('btn-calib-back', () => stopCalibration());
+
 // ---- 難易度選択 ----
 for (const btn of document.querySelectorAll('#screen-difficulty .mode-btn')) {
   btn.addEventListener('click', () => {
-    state.difficulty = btn.dataset.difficulty;
+    const pm = btn.dataset.playmode;
+    if (pm === 'mai') {
+      state.playMode = 'mai';
+    } else {
+      state.playMode = 'timing';
+      state.difficulty = pm === 'ranbu' ? 'hard' : 'normal';
+    }
     if (settings.inputMode === 'camera') startGuide();
     else beginPlay();
   });
@@ -380,17 +524,45 @@ async function beginPlay() {
     return;
   }
   const isCamera = mode === 'camera';
+  const isMai = state.playMode === 'mai';
   videoEl.hidden = !isCamera;
   stage.setCameraMode(isCamera);
-  stage.setLaneGuides(mode === 'mouse');
-  document.getElementById('lane-labels').hidden = mode !== 'mouse';
+  stage.setLaneGuides(!isMai && mode === 'mouse');
+  document.getElementById('lane-labels').hidden = isMai || mode !== 'mouse';
+  document.getElementById('mai-gauge').hidden = !isMai;
   showScreen('play');
   ui.setHud({ score: 0, combo: 0, progress: 0 });
-  game.start({
-    buffer: state.song.buffer,
-    chart: currentChart(),
-    duration: state.song.duration,
-  });
+  const s = state.song;
+  const meta = {
+    bpm: s.bpm,
+    offset: songOffset(),
+    energy: s.energy,
+    energyRate: s.energyRate,
+    highlights: s.highlights,
+  };
+  if (isMai) {
+    ui.setGauge(0, false);
+    game.start({
+      buffer: s.buffer,
+      strokes: generateStrokeChart({
+        duration: s.duration,
+        bpm: s.bpm,
+        offset: songOffset(),
+        density: settings.density,
+        seed: hashStr(s.name),
+      }),
+      duration: s.duration,
+      playMode: 'mai',
+      meta,
+    });
+  } else {
+    game.start({
+      buffer: s.buffer,
+      chart: currentChart(),
+      duration: s.duration,
+      meta,
+    });
+  }
 }
 
 ui.bind('btn-quit', () => {
@@ -408,6 +580,9 @@ function showResult(results) {
   document.getElementById('result-good').textContent = String(results.counts.good);
   document.getElementById('result-miss').textContent = String(results.counts.miss);
   document.getElementById('result-maxcombo').textContent = String(results.maxCombo);
+  const beatRow = document.getElementById('result-beat-row');
+  beatRow.hidden = results.playMode !== 'mai';
+  document.getElementById('result-beat').textContent = String(results.beatHits ?? 0);
   window.__kagemai.lastResult = results;
   showScreen('result');
 }
@@ -446,12 +621,20 @@ function syncSettingsUi() {
   const camlat = document.getElementById('camlat-slider');
   camlat.value = String(settings.cameraLatencyMs);
   document.getElementById('camlat-value').textContent = `${settings.cameraLatencyMs}ms`;
+  const offset = document.getElementById('offset-slider');
+  offset.value = String(settings.audioOffsetMs);
+  document.getElementById('offset-value').textContent = `${settings.audioOffsetMs}ms`;
   document.getElementById('debug-toggle').checked = settings.debug;
 }
 
 document.getElementById('camlat-slider').addEventListener('input', (e) => {
   settings.cameraLatencyMs = Number(e.target.value);
   document.getElementById('camlat-value').textContent = `${settings.cameraLatencyMs}ms`;
+  saveSettings();
+});
+document.getElementById('offset-slider').addEventListener('input', (e) => {
+  settings.audioOffsetMs = Number(e.target.value);
+  document.getElementById('offset-value').textContent = `${settings.audioOffsetMs}ms`;
   saveSettings();
 });
 

@@ -96,20 +96,46 @@
     <p class="fineprint">検出したビート位置でクリック音を重ねて再生します。</p>
     <div class="beat-lamp" id="beat-lamp"></div>
     <p id="preview-status" class="song-meta"></p>
+    <div class="song-info-actions">
+      <button id="btn-nudge-early" class="btn btn-small">クリックを早く −20ms</button>
+      <button id="btn-nudge-late" class="btn btn-small">遅く +20ms</button>
+    </div>
+    <p class="fineprint">クリックが曲より遅れて聞こえる場合は「早く」を押してください。調整は譜面にも反映されます。</p>
     <button id="btn-preview-stop" class="btn">とめる</button>
   </section>
 
-  <!-- 難易度選択 -->
+  <!-- タイミング校正 -->
+  <section id="screen-calibration" class="screen" hidden>
+    <h2 class="screen-heading">タイミング校正</h2>
+    <p class="fineprint">
+      流れる音に合わせて、画面のどこでもタップ(またはスペースキー)してください。<br>
+      端末ごとの音の遅れを測って、判定タイミングを合わせます。最初の2回は練習です。
+    </p>
+    <div class="beat-lamp" id="calib-lamp"></div>
+    <p id="calib-status" class="song-meta">準備中…</p>
+    <div class="song-info-actions">
+      <button id="btn-calib-done" class="btn btn-primary" hidden data-testid="calib-done">この設定にする</button>
+      <button id="btn-calib-retry" class="btn btn-small" hidden>やりなおす</button>
+      <button id="btn-calib-back" class="btn btn-small">もどる</button>
+    </div>
+  </section>
+
+  <!-- 遊び方選択 -->
   <section id="screen-difficulty" class="screen" hidden>
-    <h2 class="screen-heading">難易度をえらぶ</h2>
+    <h2 class="screen-heading">遊び方をえらぶ</h2>
     <div class="mode-list">
-      <button class="btn mode-btn" data-difficulty="normal" data-testid="difficulty-normal">
-        <span class="mode-name">通常 — 舞</span>
-        <span class="mode-desc">ノーツに触れるだけで良い</span>
+      <button class="btn mode-btn" data-playmode="mai" data-testid="playmode-mai">
+        <span class="mode-name">舞 — なぞる</span>
+        <span class="mode-desc">流れる光の筆致を手でなぞる。タイミングを競わない、動きで舞う遊び方</span>
+        <span class="mode-badge">おすすめ</span>
       </button>
-      <button class="btn mode-btn" data-difficulty="hard" data-testid="difficulty-hard">
-        <span class="mode-name">高難度 — 乱舞</span>
-        <span class="mode-desc">矢印ノーツは指定方向へ素早く払う</span>
+      <button class="btn mode-btn" data-playmode="ritsu" data-testid="difficulty-normal">
+        <span class="mode-name">律 — タイミング</span>
+        <span class="mode-desc">ノーツが環に重なる瞬間に触れる(要タイミング校正)</span>
+      </button>
+      <button class="btn mode-btn" data-playmode="ranbu" data-testid="difficulty-hard">
+        <span class="mode-name">乱舞 — 高難度</span>
+        <span class="mode-desc">律に加えて、矢印ノーツは指定方向へ素早く払う</span>
       </button>
     </div>
   </section>
@@ -135,6 +161,7 @@
     <div id="lane-labels" class="lane-labels" hidden>
       <span>D</span><span>F</span><span>J</span><span>K</span>
     </div>
+    <div id="mai-gauge" class="mai-gauge" hidden><div id="mai-gauge-fill"></div></div>
     <button id="btn-quit" class="btn btn-ghost btn-quit">中断</button>
   </section>
 
@@ -149,6 +176,7 @@
         <div><dt>良 GOOD</dt><dd id="result-good">0</dd></div>
         <div><dt>逸 MISS</dt><dd id="result-miss">0</dd></div>
         <div><dt>最大コンボ</dt><dd id="result-maxcombo">0</dd></div>
+        <div id="result-beat-row" hidden><dt>拍合</dt><dd id="result-beat">0</dd></div>
       </dl>
     </div>
     <div class="song-info-actions">
@@ -201,6 +229,11 @@
       <div class="setting-row">
         <span class="row-label">判定のゆるさ <span id="window-value"></span></span>
         <input id="window-slider" type="range" min="100" max="250" step="10">
+      </div>
+      <div class="setting-row">
+        <span class="row-label">タイミング調整 <span id="offset-value"></span></span>
+        <input id="offset-slider" type="range" min="-300" max="300" step="10">
+        <button id="btn-calibrate" class="btn btn-small">タップで自動校正する</button>
       </div>
       <div class="setting-row">
         <span class="row-label">カメラ遅延補正 <span id="camlat-value"></span></span>
